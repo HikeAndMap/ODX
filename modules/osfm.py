@@ -346,7 +346,7 @@ class OSFMContext:
             
             # We impose our own reference_lla
             if reconstruction.is_georeferenced():
-                self.write_reference_lla(reconstruction.georef.utm_east_offset, reconstruction.georef.utm_north_offset, reconstruction.georef.proj4())
+                self.write_reference_lla(reconstruction.georef.utm_east_offset, reconstruction.georef.utm_north_offset, reconstruction.georef.proj4(), self.mean_gcp_altitude(reconstruction))
         else:
             log.WARNING("%s already exists, not rerunning OpenSfM setup" % list_path)
 
@@ -563,7 +563,21 @@ class OSFMContext:
         else:
             log.WARNING("Report %s already exported" % report_path)
     
-    def write_reference_lla(self, offset_x, offset_y, proj4):
+    def mean_gcp_altitude(self, reconstruction):
+        # The topocentric reference sits at the mean GCP altitude instead of 0.0, so the grid scale OpenSfM
+        # applies when it exports to UTM is the one at the ground, not at sea level
+        try:
+            if reconstruction.has_gcp():
+                zs = [e.z for e in reconstruction.gcp.iter_entries() if not np.isnan(e.z)]
+                if len(zs) > 0:
+                    alt = float(np.mean(zs))
+                    log.INFO("Reference altitude set to the mean GCP altitude: %s" % alt)
+                    return alt
+        except Exception as e:
+            log.WARNING("Cannot compute the mean GCP altitude, using 0.0: %s" % str(e))
+        return 0.0
+
+    def write_reference_lla(self, offset_x, offset_y, proj4, altitude=0.0):
         reference_lla = self.path("reference_lla.json")
 
         longlat = CRS.from_epsg("4326")
@@ -573,7 +587,7 @@ class OSFMContext:
             f.write(json.dumps({
                 'latitude': lat,
                 'longitude': lon,
-                'altitude': 0.0
+                'altitude': altitude
             }, indent=4))
         
         log.INFO("Wrote reference_lla.json")
