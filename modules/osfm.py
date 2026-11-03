@@ -266,6 +266,10 @@ class OSFMContext:
                 "align_orientation_prior: vertical",
                 "triangulation_type: ROBUST",
                 "retriangulation_ratio: 2",
+                # From 4000 shots on OpenSfM's global bundle adjustment switches to a stochastic solver that keeps
+                # every camera's lens parameters fixed, so a camera whose photos are added after shot 4000 is never
+                # calibrated (focal = EXIF value, all distortion 0). 0 keeps the full bundle adjustment.
+                "stochastic_bundle_shot_count: 0",
             ]
             
             if args.matcher_order > 0:
