@@ -33,6 +33,9 @@ ExternalProject_Add(${_proj_name}
   GIT_TAG           c303f195fd7dc9b7fc7d58ef1c45159a91e27fd8
   #--Update/Patch step----------
   UPDATE_COMMAND    git submodule update --init --recursive
+  # The update step runs on every build, so restore the file before applying the patch again
+  PATCH_COMMAND     git checkout -- opensfm/actions/export_geocoords.py
+            COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/../patches/opensfm-export-geocoords-similarity.patch
   #--Configure step-------------
   SOURCE_DIR        ${SB_INSTALL_DIR}/bin/${_proj_name}
   CONFIGURE_COMMAND ${CMAKE_COMMAND} <SOURCE_DIR>/${_proj_name}/src
