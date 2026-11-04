@@ -8,6 +8,7 @@ from modules import types
 from modules.multispectral import get_primary_band_name
 from modules.photo import find_largest_photo_dim
 from modules.objpacker import obj_pack
+from modules import gcp_texture
 
 class ODMMvsTexStage(types.ODM_Stage):
     def process(self, args, outputs):
@@ -90,6 +91,17 @@ class ODMMvsTexStage(types.ODM_Stage):
                 if (r['nadir']):
                     nadir = '--nadir_mode'
 
+                # PATCH4: the orthophoto shows every GCP from one of the photos it is marked in
+                forcedViews = ""
+                if r['primary'] and (r['nadir'] or args.use_3dmesh) and args.gcp_texture_size > 0 and reconstruction.has_gcp():
+                    forced_views_file = os.path.join(r['out_dir'], "gcp_forced_views.txt")
+                    try:
+                        if gcp_texture.write_forced_views(forced_views_file, reconstruction, tree.dataset_raw, r['nvm_file'],
+                                                          args.gcp_texture_size, args.max_concurrency) > 0:
+                            forcedViews = '--forced_views="%s"' % forced_views_file
+                    except Exception as e:
+                        log.WARNING("[PATCH4] Cannot choose the GCP photos, texturing as usual: %s" % str(e))
+
                 # mvstex definitions
                 kwargs = {
                     'bin': context.mvstex_path,
@@ -105,7 +117,8 @@ class ODMMvsTexStage(types.ODM_Stage):
                     'maxTextureSize': '--max_texture_size=%s' % max_texture_size,
                     'nvm_file': r['nvm_file'],
                     'intermediate': '--no_intermediate_results' if (r['labeling_file'] or not reconstruction.multi_camera) else '',
-                    'labelingFile': '-L "%s"' % r['labeling_file'] if r['labeling_file'] else ''
+                    'labelingFile': '-L "%s"' % r['labeling_file'] if r['labeling_file'] else '',
+                    'forcedViews': forcedViews
                 }
 
                 mvs_tmp_dir = os.path.join(r['out_dir'], 'tmp')
@@ -124,6 +137,7 @@ class ODMMvsTexStage(types.ODM_Stage):
                         '{keepUnseenFaces} '
                         '{nadirMode} '
                         '{labelingFile} '
+                        '{forcedViews} '
                         '{numThreads} '
                         '{maxTextureSize} '.format(**kwargs))
 

@@ -568,6 +568,15 @@ def config(argv=None, parser=None):
                         help=('Keep faces in the mesh that are not seen in any camera. '
                               'Default:  %(default)s'))
 
+    parser.add_argument('--gcp-texture-size',
+                        metavar='<float >= 0.0>',
+                        action=StoreValue,
+                        default=2.0,
+                        type=float,
+                        help=('Side in meters of the square around each GCP that the orthophoto takes from one of the photos '
+                              'the GCP is marked in, so that every GCP stays visible. Set to 0 to let the texturing choose as usual. '
+                              'Default: %(default)s'))
+
     parser.add_argument('--texturing-single-material',
                         action=StoreTrue,
                         nargs=0,
