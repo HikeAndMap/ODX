@@ -266,7 +266,7 @@ class OSFMContext:
                 "align_orientation_prior: vertical",
                 "triangulation_type: ROBUST",
                 "retriangulation_ratio: 2",
-                # From 4000 shots on OpenSfM's global bundle adjustment switches to a stochastic solver that keeps
+                # PATCH3: from 4000 shots on OpenSfM's global bundle adjustment switches to a stochastic solver that keeps
                 # every camera's lens parameters fixed, so a camera whose photos are added after shot 4000 is never
                 # calibrated (focal = EXIF value, all distortion 0). 0 keeps the full bundle adjustment.
                 "stochastic_bundle_shot_count: 0",
@@ -344,6 +344,7 @@ class OSFMContext:
 
             # write config file
             log.INFO(config)
+            log.INFO("[PATCH3] stochastic_bundle_shot_count: 0, full bundle adjustment")
             config_filename = self.get_config_file_path()
             with open(config_filename, 'w') as fout:
                 fout.write("\n".join(config))
@@ -568,17 +569,18 @@ class OSFMContext:
             log.WARNING("Report %s already exported" % report_path)
     
     def mean_gcp_altitude(self, reconstruction):
-        # The topocentric reference sits at the mean GCP altitude instead of 0.0, so the grid scale OpenSfM
+        # PATCH1: the topocentric reference sits at the mean GCP altitude instead of 0.0, so the grid scale OpenSfM
         # applies when it exports to UTM is the one at the ground, not at sea level
         try:
             if reconstruction.has_gcp():
                 zs = [e.z for e in reconstruction.gcp.iter_entries() if not np.isnan(e.z)]
                 if len(zs) > 0:
                     alt = float(np.mean(zs))
-                    log.INFO("Reference altitude set to the mean GCP altitude: %s" % alt)
+                    log.INFO("[PATCH1] Reference altitude set to the mean GCP altitude: %s" % alt)
                     return alt
+            log.INFO("[PATCH1] No GCP altitudes, reference altitude stays 0.0")
         except Exception as e:
-            log.WARNING("Cannot compute the mean GCP altitude, using 0.0: %s" % str(e))
+            log.WARNING("[PATCH1] Cannot compute the mean GCP altitude, using 0.0: %s" % str(e))
         return 0.0
 
     def write_reference_lla(self, offset_x, offset_y, proj4, altitude=0.0):

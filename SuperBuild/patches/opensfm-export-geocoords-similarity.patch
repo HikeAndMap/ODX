@@ -1,21 +1,22 @@
 diff --git a/opensfm/actions/export_geocoords.py b/opensfm/actions/export_geocoords.py
-index c57ecf4..0e61914 100644
+index c57ecf4..faae4fe 100644
 --- a/opensfm/actions/export_geocoords.py
 +++ b/opensfm/actions/export_geocoords.py
-@@ -82,12 +82,18 @@ def _transform_reconstruction(
+@@ -82,12 +82,19 @@ def _transform_reconstruction(
      reconstruction: types.Reconstruction, transformation: np.ndarray
  ) -> None:
      """Apply a transformation to a reconstruction in-place."""
 -    A, b = transformation[:3, :3], transformation[:3, 3]
 -    A1 = np.linalg.inv(A)
-+    # The matrix is horizontal grid scale * rotation (grid convergence) with a unit vertical axis. Applied as given,
-+    # R @ inv(A) is no longer a rotation: reconstruction.json stores the rotation re-normalised, so whoever reads the
-+    # file back loses the grid scale again and gets a slightly wrong camera orientation. Apply it as an isotropic
++    # PATCH2: the matrix is horizontal grid scale * rotation (grid convergence) with a unit vertical axis. Applied as
++    # given, R @ inv(A) is no longer a rotation: reconstruction.json stores the rotation re-normalised, so whoever reads
++    # the file back loses the grid scale again and gets a slightly wrong camera orientation. Apply it as an isotropic
 +    # similarity instead (vertical scaled by the horizontal scale too), so the camera rotation stays orthonormal.
 +    A, b = transformation[:3, :3].copy(), transformation[:3, 3]
 +    scale = float(np.sqrt(abs(np.linalg.det(A[:2, :2]))))
 +    A[2, 2] = scale
 +    Ro = A / scale
++    logger.info("[PATCH2] export_geocoords applied as a similarity, grid scale %.9f" % scale)
  
      for shot in reconstruction.shots.values():
          R = shot.pose.get_rotation_matrix()
