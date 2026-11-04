@@ -8,13 +8,10 @@ ExternalProject_Add(${_proj_name}
   STAMP_DIR         ${_SB_BINARY_DIR}/stamp
   #--Download step--------------
   DOWNLOAD_DIR      ${SB_DOWNLOAD_DIR}/${_proj_name}
-  GIT_REPOSITORY    https://github.com/WebODM/mvs-texturing
-  GIT_TAG           a56b5e7f95f0bb1dd1e1eb89ce5da202349c0e01
+  GIT_REPOSITORY    https://github.com/HikeAndMap/mvs-texturing
+  GIT_TAG           2fe58e5acabf0b66e99d6b77aff15cb00a7045a7
   #--Update/Patch step----------
   UPDATE_COMMAND    ""
-  # PATCH4: --forced_views; restore the files first so the patch also applies when the step runs again
-  PATCH_COMMAND     git checkout -- apps/texrecon/arguments.cpp libs/tex/calculate_data_costs.cpp libs/tex/settings.h libs/tex/texture_view.h
-            COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/../patches/mvs-texturing-forced-views.patch
   #--Configure step-------------
   SOURCE_DIR        ${SB_SOURCE_DIR}/${_proj_name}
   CMAKE_ARGS
