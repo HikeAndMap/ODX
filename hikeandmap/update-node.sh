@@ -28,9 +28,9 @@ CPUS=${CPUS:-15}
 CLEANUP_MINUTES=${CLEANUP_MINUTES:-20160}
 
 ODX_REPO=https://github.com/HikeAndMap/ODX.git
-# NodeODX is used unchanged, at a fixed commit; it is forked as soon as we change it
-NODEODX_REPO=https://github.com/WebODM/NodeODX.git
-NODEODX_COMMIT=02296467c0ca2142c2c7771876788bacbed102f6
+# NodeODX from our fork (WebODM/NodeODX 02296467 + the Dockerfile without BuildKit warnings), at a fixed commit
+NODEODX_REPO=https://github.com/HikeAndMap/NodeODX.git
+NODEODX_COMMIT=f3a2b7bdfecad44dbb725f892ba280da1ec1136b
 
 LOGS=$WORK/logs
 
@@ -68,6 +68,7 @@ build() {
 
     # $WORK/ODX is only a build copy of GitHub: it is reset to HikeAndMap/ODX master every time
     if [ ! -d "$WORK/ODX/.git" ]; then git clone "$ODX_REPO" "$WORK/ODX"; fi
+    git -C "$WORK/ODX" remote set-url origin "$ODX_REPO"
     git -C "$WORK/ODX" fetch origin
     git -C "$WORK/ODX" reset --hard origin/master
     local commit level
@@ -76,6 +77,8 @@ build() {
     level=${level:-0}
 
     if [ ! -d "$WORK/NodeODX/.git" ]; then git clone "$NODEODX_REPO" "$WORK/NodeODX"; fi
+    # an older build folder may still point to WebODM/NodeODX
+    git -C "$WORK/NodeODX" remote set-url origin "$NODEODX_REPO"
     git -C "$WORK/NodeODX" fetch origin
     git -C "$WORK/NodeODX" checkout --force "$NODEODX_COMMIT"
 
