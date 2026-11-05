@@ -16,6 +16,7 @@ from modules import multispectral
 from modules import thermal
 from modules import nvm
 from modules.photo import find_largest_photo
+from modules import gps_weights
 
 from opensfm.undistort import add_image_format_extension
 
@@ -29,7 +30,13 @@ class ODMOpenSfMStage(types.ODM_Stage):
             raise system.ExitException('Not enough photos in photos array to start OpenSfM')
 
         octx = OSFMContext(tree.opensfm)
+        # [PATCH6] also for a photo list written before the patch (a restart): the photos without their own accuracy get the options
+        gps_weights.mark_sources(photos)
+        gps_weights.set_accuracy_without_own(photos, args.gps_accuracy, args.gps_accuracy_vertical)
         octx.setup(args, tree.dataset_raw, photos, reconstruction=reconstruction, rerun=self.rerun())
+        if reconstruction.has_gcp() and not args.force_gps and gps_weights.keep_gps_with_gcp(photos):
+            silenced = gps_weights.silence_without_rtk(photos)
+            log.INFO("[PATCH6] With GCPs, the %s photos without RTK do not pull on positions (accuracy %s m); only the RTK photos and the GCPs do" % (silenced, gps_weights.NO_PULL_METRES))
         octx.photos_to_metadata(photos, args.rolling_shutter, args.rolling_shutter_readout, args.gps_accuracy, self.rerun())
         self.update_progress(20)
         octx.feature_matching(self.rerun())

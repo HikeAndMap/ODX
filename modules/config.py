@@ -863,10 +863,19 @@ def config(argv=None, parser=None):
                         metavar='<positive float>',
                         default=3,
                         help='Set a value in meters for the GPS Dilution of Precision (DOP) '
-                        'information for all images. If your images are tagged '
-                        'with high precision GPS information (RTK), this value will be automatically '
-                        'set accordingly. You can use this option to manually set it in case the reconstruction '
+                        'information of the images that do not carry their own accuracy. Images tagged '
+                        'with high precision GPS information (RTK) keep their own accuracy, so RTK and non-RTK images can be processed together '
+                        '(see also --gps-accuracy-vertical). You can use this option to manually set it in case the reconstruction '
                         'fails. Lowering this option can sometimes help control bowling-effects over large areas. Default: %(default)s')
+
+    parser.add_argument('--gps-accuracy-vertical',
+                        type=float,
+                        action=StoreValue,
+                        metavar='<positive float>',
+                        default=0,
+                        help='Set a value in meters for the vertical accuracy of the GPS of the images that do not carry their own accuracy '
+                        '(images without RTK). The absolute altitude of a drone without RTK is often off by tens of meters, far more than '
+                        'its horizontal position. 0 uses the value of --gps-accuracy. Images with their own accuracy (RTK) keep it. Default: %(default)s')
 
     parser.add_argument('--gps-z-offset',
                         type=float,

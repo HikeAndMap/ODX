@@ -8,6 +8,7 @@ from modules.photo import PhotoCorruptedException
 from modules import log
 from modules import system
 from modules.geo import GeoFile
+from modules import gps_weights
 from shutil import copyfile
 from modules import progress
 from modules import boundary
@@ -185,12 +186,11 @@ class ODMLoadDatasetStage(types.ODM_Stage):
                 elif tree.odm_geo_file is not None and not os.path.isfile(tree.odm_geo_file):
                     log.WARNING("Image geolocation file %s does not exist" % tree.odm_geo_file) 
 
-                # GPSDOP override if we have GPS accuracy information (such as RTK)
-                if 'gps_accuracy_is_set' in args:
-                    log.INFO("Forcing GPS DOP to %s for all images" % args.gps_accuracy)
-
-                    for p in photos:
-                        p.override_gps_dop(args.gps_accuracy)
+                # [PATCH6] the accuracy of the photo positions: a photo with its own (RTK) keeps it, the others get
+                # --gps-accuracy horizontally and --gps-accuracy-vertical vertically (stock ODX overwrote every photo)
+                gps_weights.mark_sources(photos)
+                gps_weights.set_accuracy_without_own(photos, args.gps_accuracy, args.gps_accuracy_vertical)
+                log.INFO(gps_weights.summary(photos, args.gps_accuracy, args.gps_accuracy_vertical))
                 
                 # Override projection type
                 if args.camera_lens != "auto":

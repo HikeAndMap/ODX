@@ -14,6 +14,7 @@ from modules import context
 from modules import camera
 from modules import location
 from modules.gcp import GCPFile
+from modules import gps_weights
 from modules.photo import find_largest_photo_dims, find_largest_photo
 from opensfm.large import metadataset
 from opensfm.large import tools
@@ -332,10 +333,13 @@ class OSFMContext:
                 
             if gcp_path:
                 config.append("bundle_use_gcp: yes")
-                if not args.force_gps:
-                    config.append("bundle_use_gps: no")
-                else:
+                if args.force_gps:
                     config.append("bundle_compensate_gps_bias: yes")
+                elif gps_weights.keep_gps_with_gcp(photos):
+                    # [PATCH6] the RTK photos stay position control next to the GCPs (the others are silenced in run_opensfm)
+                    log.INFO("[PATCH6] GCPs and %s RTK photos: the RTK positions stay in the bundle adjustment next to the GCPs" % gps_weights.rtk_count(photos))
+                else:
+                    config.append("bundle_use_gps: no")
                     
                 gcp = GCPFile(gcp_path)
                 gcp.export_opensfm_json(self.path("ground_control_points.json"), photos)
