@@ -16,6 +16,7 @@ from modules.utils import get_processing_results_paths, rm_r
 from modules.arghelpers import args_to_dict, save_opts, find_rerun_stage
 
 from stages.odm_app import ODMApp
+from modules.memory_monitor import monitor as memory_monitor
 
 
 
@@ -57,7 +58,9 @@ if __name__ == '__main__':
             rm_r(d)
 
     app = ODMApp(args)
+    memory_monitor.start() # [PATCH5]
     retcode = app.execute()
+    memory_monitor.stop()
 
     if retcode == 0:
         save_opts(opts_json, args)

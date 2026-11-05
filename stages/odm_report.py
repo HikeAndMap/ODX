@@ -13,6 +13,7 @@ from modules import gsd
 from modules.point_cloud import export_info_json
 from modules.cropper import Cropper
 from modules.orthophoto import get_orthophoto_vars, get_max_memory, generate_png
+from modules.memory_monitor import monitor as memory_monitor, gib
 from modules.tiles.tiler import generate_colored_hillshade
 from modules.utils import get_raster_stats, np_from_json
 
@@ -98,6 +99,15 @@ class ODMReport(types.ODM_Stage):
         views_dimension = None
 
         if not os.path.exists(odm_stats_json) or self.rerun():
+            # [PATCH5] the memory figures of an earlier run of this task, kept for the stages this run does not repeat
+            previous_memory = None
+            if os.path.exists(odm_stats_json):
+                try:
+                    with open(odm_stats_json, 'r') as f:
+                        previous_memory = json.loads(f.read()).get('memory_statistics')
+                except Exception:
+                    previous_memory = None
+
             if os.path.exists(osfm_stats_json):
                 with open(osfm_stats_json, 'r') as f:
                     odm_stats = json.loads(f.read())
@@ -130,6 +140,14 @@ class ODMReport(types.ODM_Stage):
                     'total_time_human': hms(total_time),
                     'average_gsd': gsd.opensfm_reconstruction_average_gsd(octx.recon_file(), use_all_shots=reconstruction.has_gcp()),
                 }
+
+                # [PATCH5] Add memory stats
+                memory_stats = memory_monitor.statistics(previous_memory)
+                if memory_stats:
+                    odm_stats['memory_statistics'] = memory_stats
+                    log.INFO("[PATCH5] Peak memory of the run: %s RAM, %s swap, %s together (highest in the %s stage; measured from %s)" % (
+                        gib(memory_stats['peak_ram_bytes']), gib(memory_stats['peak_swap_bytes']), gib(memory_stats['peak_total_bytes']),
+                        memory_stats['peak_total_stage'], memory_stats['source']))
 
                 # Add CODEM stats
                 if os.path.exists(codem_stats_json):

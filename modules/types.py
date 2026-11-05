@@ -440,8 +440,16 @@ class ODM_Stage:
         log.logger.log_json_stage_run(self.name, start_time)
 
         log.INFO('Running %s stage' % self.name)
-        
-        self.process(self.args, outputs)
+
+        # [PATCH5] the memory this stage takes - printed also when the stage fails (for instance when it ran out of memory)
+        from modules.memory_monitor import monitor as memory_monitor
+        memory_monitor.stage_started(self.name)
+        try:
+            self.process(self.args, outputs)
+        finally:
+            memory_line = memory_monitor.stage_finished(self.name)
+            if memory_line:
+                log.INFO(memory_line)
 
         # The tree variable should always be populated at this point
         if outputs.get('tree') is None:

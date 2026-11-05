@@ -8,14 +8,21 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # Prepare directories
 WORKDIR /code
 
-# Copy everything
-COPY . ./
+# HikeAndMap: first only what the long build needs (the build script, the Python requirements and the SuperBuild), then
+# the rest of the code. A change to ODX's own Python code then rebuilds in minutes from the cached SuperBuild; a change to
+# requirements.txt or SuperBuild/ (for instance the commit of one of our forks) still rebuilds everything, as it must.
+COPY configure.sh requirements.txt ./
+COPY SuperBuild ./SuperBuild
+COPY docker ./docker
 
 # Run the build
 RUN bash configure.sh install
 
 # Clean Superbuild
 RUN bash configure.sh clean
+
+# Copy everything else (SuperBuild's build output is in .dockerignore, so it is not overwritten)
+COPY . ./
 
 ### END Builder
 
