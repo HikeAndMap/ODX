@@ -342,3 +342,8 @@ class ODMLoadDatasetStage(types.ODM_Stage):
 
             for p in photos:
                 p.adjust_z_offset(args.gps_z_offset)
+
+        # [PATCH6] a height offset for the RTK photos only (in memory, as --gps-z-offset; images.json keeps the photo values)
+        if args.rtk_z_offset:
+            n = gps_weights.apply_rtk_z_offset(photos, args.rtk_z_offset)
+            log.INFO("[PATCH6] Heights of the %s RTK photos adjusted by %s m (--rtk-z-offset); the photos without RTK keep theirs" % (n, args.rtk_z_offset))

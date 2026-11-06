@@ -42,6 +42,8 @@ rerun_stages = {
     'gltf': 'odm_postprocess',
     'gps_accuracy': 'dataset',
     'gps_z_offset': 'dataset',
+    'gps_accuracy_vertical': 'dataset',
+    'rtk_z_offset': 'dataset',
     'help': None,
     'ignore_gsd': 'opensfm',
     'matcher_neighbors': 'opensfm',
@@ -885,6 +887,16 @@ def config(argv=None, parser=None):
                         help='Set a GPS offset in meters for the vertical axis (Z) '
                         'by adding it to the altitude value of the GPS EXIF data. This does not change the value of any GCPs. '
                         'This can be useful for example when adjusting from ellipsoidal to orthometric height. '
+                        'Default: %(default)s')
+
+    parser.add_argument('--rtk-z-offset',
+                        type=float,
+                        action=StoreValue,
+                        metavar='<float>',
+                        default=0,
+                        help='Set an offset in meters for the vertical axis (Z) of the images with RTK only (RTK fixed), '
+                        'by adding it to their altitude. Their heights hang from the height the RTK base broadcasts, which may differ '
+                        'from the height system of the GCPs; the images without RTK keep theirs. Added to --gps-z-offset if both are set. '
                         'Default: %(default)s')
     
     parser.add_argument('--optimize-disk-space',

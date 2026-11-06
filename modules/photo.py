@@ -167,6 +167,7 @@ class ODM_Photo:
         # RTK
         self.gps_xy_stddev = None # Dilution of Precision X/Y
         self.gps_z_stddev = None # Dilution of Precision Z
+        self.rtk_flag = None # [PATCH6] DJI RtkFlag (50 = fixed)
 
         # Misc SFM
         self.camera_projection = 'brown'
@@ -410,7 +411,10 @@ class ODM_Photo:
                     # Phantom 4 RTK
                     if '@drone-dji:RtkStdLon' in xtags or 'drone-dji:RtkStdLon' in xtags:
                         rtk_flag = self.get_xmp_tag(xtags, ['@drone-dji:RtkFlag', 'drone-dji:RtkFlag'])
-                        if rtk_flag is None or int(float(rtk_flag)) > 0:
+                        # [PATCH6] only an RTK fixed solution (RtkFlag 50) brings its own accuracy. Single point (16) and
+                        # float (34) report centimetres too, but are decimetres to metres off; stock ODX accepted any flag above 0.
+                        self.rtk_flag = int(float(rtk_flag)) if rtk_flag is not None else None
+                        if rtk_flag is None or self.rtk_flag == 50:
                             y = float(self.get_xmp_tag(xtags, ['@drone-dji:RtkStdLon', 'drone-dji:RtkStdLon']))
                             x = float(self.get_xmp_tag(xtags, ['@drone-dji:RtkStdLat', 'drone-dji:RtkStdLat']))
                             self.gps_xy_stddev = max(x, y)

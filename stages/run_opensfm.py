@@ -37,6 +37,10 @@ class ODMOpenSfMStage(types.ODM_Stage):
         if reconstruction.has_gcp() and not args.force_gps and gps_weights.keep_gps_with_gcp(photos):
             silenced = gps_weights.silence_without_rtk(photos)
             log.INFO("[PATCH6] With GCPs, the %s photos without RTK do not pull on positions (accuracy %s m); only the RTK photos and the GCPs do" % (silenced, gps_weights.NO_PULL_METRES))
+        elif not reconstruction.has_gcp() and gps_weights.has_rtk_anchors(photos):
+            freed = gps_weights.free_heights_without_rtk(photos)
+            log.INFO("[PATCH6] %s RTK photos as anchors: the heights of the %s photos without RTK do not count (vertical accuracy %s m), their positions count with %s m" % (
+                gps_weights.rtk_count(photos), freed, gps_weights.NO_PULL_METRES, args.gps_accuracy))
         octx.photos_to_metadata(photos, args.rolling_shutter, args.rolling_shutter_readout, args.gps_accuracy, self.rerun())
         self.update_progress(20)
         octx.feature_matching(self.rerun())
@@ -62,6 +66,15 @@ class ODMOpenSfMStage(types.ODM_Stage):
             self.next_stage = None
             cleanup_disk_space()
             return
+
+        # [PATCH6] with GCPs: how far the RTK photos' heights are from the heights the GCPs give them (a wrong --rtk-z-offset
+        # shows here). Only while reconstruction.json is still topocentric, i.e. before the export below.
+        if reconstruction.is_georeferenced() and reconstruction.has_gcp() and gps_weights.rtk_count(photos) > 0 and \
+                (not io.file_exists(tree.opensfm_topocentric_reconstruction) or self.rerun()):
+            try:
+                gps_weights.log_rtk_check(octx.opensfm_project_path, photos, used=(not args.force_gps and gps_weights.keep_gps_with_gcp(photos)))
+            except Exception as e:
+                log.WARNING("[PATCH6] Cannot compare the RTK photos with the GCPs: %s" % str(e))
 
         # Stats are computed in the local CRS (before geoprojection)
         if not args.skip_report:
