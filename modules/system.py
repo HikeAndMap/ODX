@@ -90,6 +90,10 @@ def run(cmd, env_paths=[context.superbuild_bin_path], env_vars={}, packages_path
     for k in env_vars:
         env[k] = str(env_vars[k])
 
+    # [PATCH9] how long this program takes
+    import time as _time
+    from modules.run_timing import timing as _run_timing, step_name as _step_name
+    started_at, started = datetime.datetime.now(), _time.monotonic()
     p = subprocess.Popen(cmd, shell=True, env=env, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     running_subprocesses.append(p)
     lines = deque()
@@ -101,9 +105,11 @@ def run(cmd, env_paths=[context.superbuild_bin_path], env_vars={}, packages_path
             lines.popleft()
 
     retcode = p.wait()
+    seconds = _time.monotonic() - started
+    _run_timing.add_step(_step_name(cmd), started_at, seconds, retcode)
 
     if not quiet:
-        log.logger.log_json_process(cmd, retcode, list(lines))
+        log.logger.log_json_process(cmd, retcode, list(lines), started_at, seconds)
 
     running_subprocesses.remove(p)
     if retcode < 0:

@@ -14,6 +14,7 @@ from modules.point_cloud import export_info_json
 from modules.cropper import Cropper
 from modules.orthophoto import get_orthophoto_vars, get_max_memory, generate_png
 from modules.memory_monitor import monitor as memory_monitor, gib
+from modules.run_timing import timing as run_timing, hms
 from modules.tiles.tiler import generate_colored_hillshade
 from modules.utils import get_raster_stats, np_from_json
 
@@ -101,12 +102,16 @@ class ODMReport(types.ODM_Stage):
         if not os.path.exists(odm_stats_json) or self.rerun():
             # [PATCH5] the memory figures of an earlier run of this task, kept for the stages this run does not repeat
             previous_memory = None
+            previous_timing = None
             if os.path.exists(odm_stats_json):
                 try:
                     with open(odm_stats_json, 'r') as f:
-                        previous_memory = json.loads(f.read()).get('memory_statistics')
+                        previous_stats = json.loads(f.read())
+                    previous_memory = previous_stats.get('memory_statistics')
+                    previous_timing = previous_stats.get('timing_statistics')
                 except Exception:
                     previous_memory = None
+                    previous_timing = None
 
             if os.path.exists(osfm_stats_json):
                 with open(osfm_stats_json, 'r') as f:
@@ -148,6 +153,17 @@ class ODMReport(types.ODM_Stage):
                     log.INFO("[PATCH5] Peak memory of the run: %s RAM, %s swap, %s together (highest in the %s stage; measured from %s)" % (
                         gib(memory_stats['peak_ram_bytes']), gib(memory_stats['peak_swap_bytes']), gib(memory_stats['peak_total_bytes']),
                         memory_stats['peak_total_stage'], memory_stats['source']))
+
+                # [PATCH9] Add timing stats
+                timing_stats = run_timing.statistics(previous_timing)
+                if timing_stats:
+                    odm_stats['timing_statistics'] = timing_stats
+                    steps = [st for s in timing_stats['stages'] for st in (s.get('steps') or [])]
+                    longest = sorted(steps, key=lambda st: st.get('seconds') or 0, reverse=True)[:3]
+                    log.INFO("[PATCH9] Time per stage recorded (%s stages, %s steps, %s measured%s); longest steps: %s" % (
+                        len(timing_stats['stages']), len(steps), hms(timing_stats['total_seconds']),
+                        ', with an earlier run of this task' if timing_stats.get('merged_with_earlier_run') else '',
+                        ', '.join('%s %s' % (st['name'], hms(st.get('seconds'))) for st in longest) or 'none'))
 
                 # Add CODEM stats
                 if os.path.exists(codem_stats_json):

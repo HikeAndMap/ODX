@@ -12,6 +12,7 @@ from modules import gcp_texture
 from modules import vehicle_boxes
 from modules import wire_masks
 from modules import ai
+from modules.run_timing import timing as run_timing
 
 class ODMMvsTexStage(types.ODM_Stage):
     def process(self, args, outputs):
@@ -90,7 +91,8 @@ class ODMMvsTexStage(types.ODM_Stage):
                                                "orthophoto. Rerun from mvs_texturing once they can be loaded, or set "
                                                "--orthophoto-keep-vehicles to texture without")
                 log.INFO("[PATCH7] Looking for vehicles and people in the photos")
-                vehicle_boxes.write_boxes(masked_boxes_file, primary_nvm, models, args.max_concurrency, log)
+                with run_timing.measure('[PATCH7] vehicles and people'):
+                    vehicle_boxes.write_boxes(masked_boxes_file, primary_nvm, models, args.max_concurrency, log)
 
         # [PATCH8] the overhead wires in the photos of the primary band, found on the 2.5D mesh the orthophoto is painted on,
         # once, and reused while the undistorted photos and the mesh stay the same
@@ -105,7 +107,8 @@ class ODMMvsTexStage(types.ODM_Stage):
             if wire_masks.is_current(masked_ground_file, [nadir_run['nvm_file'], nadir_run['model']]):
                 log.INFO("[PATCH8] Using the overhead wires found earlier for these photos: %s" % masked_ground_file)
             else:
-                wire_masks.write_masks(masked_ground_file, nadir_run['nvm_file'], nadir_run['model'], args.max_concurrency, log)
+                with run_timing.measure('[PATCH8] overhead wires'):
+                    wire_masks.write_masks(masked_ground_file, nadir_run['nvm_file'], nadir_run['model'], args.max_concurrency, log)
 
         for r in nonloc.runs:
             if not io.dir_exists(r['out_dir']):

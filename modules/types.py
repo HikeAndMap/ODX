@@ -443,13 +443,21 @@ class ODM_Stage:
 
         # [PATCH5] the memory this stage takes - printed also when the stage fails (for instance when it ran out of memory)
         from modules.memory_monitor import monitor as memory_monitor
+        # [PATCH9] how long this stage takes
+        from modules.run_timing import timing as run_timing, hms
         memory_monitor.stage_started(self.name)
+        run_timing.stage_started(self.name)
+        completed = False
         try:
             self.process(self.args, outputs)
+            completed = True
         finally:
             memory_line = memory_monitor.stage_finished(self.name)
             if memory_line:
                 log.INFO(memory_line)
+            seconds = run_timing.stage_finished(self.name, completed)
+            if seconds is not None:
+                log.INFO("[PATCH9] The %s stage took %s" % (self.name, hms(seconds)))
 
         # The tree variable should always be populated at this point
         if outputs.get('tree') is None:

@@ -101,12 +101,19 @@ class Logger:
             self.json['success'] = True
             self._log_json_end_time()
     
-    def log_json_process(self, cmd, exit_code, output = []):
+    def log_json_process(self, cmd, exit_code, output = [], start_time = None, seconds = None):
         if self.json is not None:
             d = {
                 'command': cmd,
                 'exitCode': exit_code,
             }
+            # [PATCH9] when the program ran and how long it took
+            if start_time is not None:
+                d['startTime'] = start_time.isoformat()
+            if seconds is not None:
+                d['seconds'] = round(seconds, 2)
+                if start_time is not None:
+                    d['endTime'] = (start_time + datetime.timedelta(seconds=seconds)).isoformat()
             if output:
                 d['output'] = output
 
