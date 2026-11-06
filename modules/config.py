@@ -97,6 +97,9 @@ rerun_stages = {
     'split_image_groups': 'split',
     'split_overlap': 'split',
     'texturing_keep_unseen_faces': 'mvs_texturing',
+    'gcp_texture_size': 'mvs_texturing',
+    'orthophoto_keep_vehicles': 'mvs_texturing',
+    'orthophoto_keep_wires': 'mvs_texturing',
     'texturing_single_material': 'mvs_texturing',
     'texturing_skip_global_seam_leveling': 'mvs_texturing',
     'tiles': 'odm_dem',
@@ -578,6 +581,26 @@ def config(argv=None, parser=None):
                         help=('Side in meters of the square around each GCP that the orthophoto takes from one of the photos '
                               'the GCP is marked in, so that every GCP stays visible. Set to 0 to let the texturing choose as usual. '
                               'Default: %(default)s'))
+
+    parser.add_argument('--orthophoto-keep-vehicles',
+                        action=StoreTrue,
+                        nargs=0,
+                        default=False,
+                        help=('Keep vehicles and people in the orthophoto and the textured model as the photos show them. '
+                              'By default every photo is searched for vehicles and people (YOLOX, two models), and each spot '
+                              'is painted from a photo without one there, where such a photo exists; a vehicle seen in every '
+                              'photo (parked during all flights) stays. This takes several seconds per photo. '
+                              'Default: %(default)s'))
+
+    parser.add_argument('--orthophoto-keep-wires',
+                        action=StoreTrue,
+                        nargs=0,
+                        default=False,
+                        help=('Keep overhead wires in the orthophoto as the photos show them. By default every photo is '
+                              'projected onto the 2.5D mesh and compared with the photos around it: a wire hangs above the '
+                              'surface and lands somewhere else in each photo, so each spot is painted from a photo without '
+                              'a wire there, where such a photo exists. Markings, kerbs, roofs, shadows and GCPs lie on the '
+                              'surface and stay. Default: %(default)s'))
 
     parser.add_argument('--texturing-single-material',
                         action=StoreTrue,

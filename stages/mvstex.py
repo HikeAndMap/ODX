@@ -9,6 +9,9 @@ from modules.multispectral import get_primary_band_name
 from modules.photo import find_largest_photo_dim
 from modules.objpacker import obj_pack
 from modules import gcp_texture
+from modules import vehicle_boxes
+from modules import wire_masks
+from modules import ai
 
 class ODMMvsTexStage(types.ODM_Stage):
     def process(self, args, outputs):
@@ -65,6 +68,45 @@ class ODMMvsTexStage(types.ODM_Stage):
         progress_per_run = 100.0 / len(nonloc.runs)
         progress = 0.0
 
+        # [PATCH7] the vehicles and people in the photos of the primary band, found once for all its texturing runs and
+        # reused while the undistorted photos stay the same
+        masked_boxes_file = None
+        primary_nvm = next((r['nvm_file'] for r in nonloc.runs if r['primary']), None)
+        to_texture = any(not io.file_exists(os.path.join(r['out_dir'], tree.odm_textured_model_obj)) or self.rerun()
+                         for r in nonloc.runs if r['primary'])
+        if not to_texture:
+            pass
+        elif args.orthophoto_keep_vehicles:
+            log.INFO("[PATCH7] orthophoto-keep-vehicles is set: vehicles and people are textured as the photos show them")
+        elif primary_nvm is not None:
+            masked_boxes_file = os.path.join(os.path.dirname(primary_nvm), "vehicle_boxes.txt")
+            if vehicle_boxes.is_current(masked_boxes_file, primary_nvm):
+                log.INFO("[PATCH7] Using the vehicles and people found earlier for these photos: %s" % masked_boxes_file)
+            else:
+                models = [ai.get_model(vehicle_boxes.MODEL_NAMESPACE, url, vehicle_boxes.MODEL_VERSION, name=name)
+                          for name, url, _ in vehicle_boxes.MODELS]
+                if any(m is None for m in models):
+                    raise system.ExitException("[PATCH7] Cannot load the YOLOX models to keep vehicles and people out of the "
+                                               "orthophoto. Rerun from mvs_texturing once they can be loaded, or set "
+                                               "--orthophoto-keep-vehicles to texture without")
+                log.INFO("[PATCH7] Looking for vehicles and people in the photos")
+                vehicle_boxes.write_boxes(masked_boxes_file, primary_nvm, models, args.max_concurrency, log)
+
+        # [PATCH8] the overhead wires in the photos of the primary band, found on the 2.5D mesh the orthophoto is painted on,
+        # once, and reused while the undistorted photos and the mesh stay the same
+        masked_ground_file = None
+        nadir_run = next((r for r in nonloc.runs if r['primary'] and r['nadir']), None)
+        if nadir_run is None or not (not io.file_exists(os.path.join(nadir_run['out_dir'], tree.odm_textured_model_obj)) or self.rerun()):
+            pass
+        elif args.orthophoto_keep_wires:
+            log.INFO("[PATCH8] orthophoto-keep-wires is set: overhead wires are textured as the photos show them")
+        else:
+            masked_ground_file = os.path.join(os.path.dirname(nadir_run['nvm_file']), "wire_masks.bin")
+            if wire_masks.is_current(masked_ground_file, [nadir_run['nvm_file'], nadir_run['model']]):
+                log.INFO("[PATCH8] Using the overhead wires found earlier for these photos: %s" % masked_ground_file)
+            else:
+                wire_masks.write_masks(masked_ground_file, nadir_run['nvm_file'], nadir_run['model'], args.max_concurrency, log)
+
         for r in nonloc.runs:
             if not io.dir_exists(r['out_dir']):
                 system.mkdir_p(r['out_dir'])
@@ -118,7 +160,9 @@ class ODMMvsTexStage(types.ODM_Stage):
                     'nvm_file': r['nvm_file'],
                     'intermediate': '--no_intermediate_results' if (r['labeling_file'] or not reconstruction.multi_camera) else '',
                     'labelingFile': '-L "%s"' % r['labeling_file'] if r['labeling_file'] else '',
-                    'forcedViews': forcedViews
+                    'forcedViews': forcedViews,
+                    'maskedBoxes': '--masked_boxes="%s"' % masked_boxes_file if (r['primary'] and masked_boxes_file) else '',
+                    'maskedGround': '--masked_ground="%s"' % masked_ground_file if (r['primary'] and r['nadir'] and masked_ground_file) else ''
                 }
 
                 mvs_tmp_dir = os.path.join(r['out_dir'], 'tmp')
@@ -138,6 +182,8 @@ class ODMMvsTexStage(types.ODM_Stage):
                         '{nadirMode} '
                         '{labelingFile} '
                         '{forcedViews} '
+                        '{maskedBoxes} '
+                        '{maskedGround} '
                         '{numThreads} '
                         '{maxTextureSize} '.format(**kwargs))
 
