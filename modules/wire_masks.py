@@ -12,6 +12,10 @@
 # as possible (with a tolerance of TOL cells for misalignment), and of that the pieces at least MINLEN long, widened by
 # GROW cells. The result is a mask per photo and tile, in mesh coordinates, which texrecon reads (--masked_ground): a face
 # is not painted from a photo whose mask has a wire under it, as long as a photo without one sees it.
+#
+# [PATCH10] With photos of several surveys (months), each photo is compared only with photos of its own survey: between
+# surveys the ground itself may have changed (a new roof, a widened road), which is not a wire. A survey with fewer than
+# MIN_VIEWS photos over a tile leaves its photos unchecked there.
 
 import os
 import math
@@ -147,9 +151,10 @@ def even_out(Ls, ref):
 
 
 class _Worker:
-    def __init__(self, views, sizes, vertices):
+    def __init__(self, views, sizes, vertices, ranks=None):
         self.views, self.sizes, self.vertices = views, sizes, vertices
         self.centres = np.array([v['C'] for v in views])
+        self.ranks = ranks  # [PATCH10] survey of every view, or None for one survey
         self.cache = OrderedDict()
 
     def image(self, i, reduce):
@@ -192,6 +197,14 @@ class _Worker:
         if len(seen) < MIN_VIEWS:
             return []
         seen.sort()
+        if self.ranks is not None:
+            # [PATCH10] only photos of a survey with enough of them over this tile; each compared within its survey
+            counts = {}
+            for _, i in seen:
+                counts[self.ranks[i]] = counts.get(self.ranks[i], 0) + 1
+            seen = [(a, i) for a, i in seen if counts[self.ranks[i]] >= MIN_VIEWS]
+            if not seen:
+                return []
         order = [i for _, i in seen]
 
         Ls = []
@@ -204,25 +217,28 @@ class _Worker:
             img = self.image(i, reduce)
             Ls.append(cv2.remap(img, (u / reduce).astype(np.float32), (v / reduce).astype(np.float32),
                                 cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE).astype(np.float32))
-        refs = spread(list(range(len(order))), self.centres[order], REF_VIEWS)
-        raw = np.median(np.stack([Ls[r] for r in refs]), 0).astype(np.float32)
-        Ls = even_out(Ls, raw)
-        M = np.median(np.stack([Ls[r] for r in refs]), 0).astype(np.float32)
-
+        groups = [list(range(len(order)))] if self.ranks is None else \
+            [[j for j, i in enumerate(order) if self.ranks[i] == r] for r in sorted(set(self.ranks[i] for i in order))]
         out = []
-        for j, i in enumerate(order):
-            wire = wire_mask(Ls[j], M)
-            small = wire.reshape(MASK_CELLS, MASK_FACTOR, MASK_CELLS, MASK_FACTOR).max(axis=(1, 3))
-            out.append((i, np.packbits(small.astype(np.uint8).ravel()).tobytes(), float(wire.mean())))
+        for group in groups:
+            sub = [Ls[j] for j in group]
+            refs = spread(list(range(len(group))), self.centres[[order[j] for j in group]], REF_VIEWS)
+            raw = np.median(np.stack([sub[r] for r in refs]), 0).astype(np.float32)
+            sub = even_out(sub, raw)
+            M = np.median(np.stack([sub[r] for r in refs]), 0).astype(np.float32)
+            for k, j in enumerate(group):
+                wire = wire_mask(sub[k], M)
+                small = wire.reshape(MASK_CELLS, MASK_FACTOR, MASK_CELLS, MASK_FACTOR).max(axis=(1, 3))
+                out.append((order[j], np.packbits(small.astype(np.uint8).ravel()).tobytes(), float(wire.mean())))
         return out
 
 
 _worker = None
 
 
-def _init(views, sizes, vertices):
+def _init(views, sizes, vertices, ranks=None):
     global _worker
-    _worker = _Worker(views, sizes, vertices)
+    _worker = _Worker(views, sizes, vertices, ranks)
 
 
 def _run(job):
@@ -239,8 +255,16 @@ def read_mesh_vertices(mesh_file):
     return np.asarray(mesh.vertices, dtype=np.float64)
 
 
-def is_current(masks_file, inputs):
-    """True when the masks file was written after all inputs with the current settings."""
+def surveys_header(ranks):
+    """[PATCH10] the second header line: how the photos were grouped into surveys ("" for one survey)."""
+    if ranks is None:
+        return ""
+    import hashlib
+    return "# [PATCH10] surveys %s" % hashlib.sha1(",".join(str(r) for r in ranks).encode()).hexdigest()
+
+
+def is_current(masks_file, inputs, ranks=None):
+    """True when the masks file was written after all inputs with the current settings (and survey grouping)."""
     side = masks_file + ".txt"
     if not (os.path.isfile(masks_file) and os.path.isfile(side)):
         return False
@@ -248,11 +272,30 @@ def is_current(masks_file, inputs):
     if any(not os.path.isfile(f) or os.path.getmtime(f) > t for f in inputs):
         return False
     with open(side) as f:
-        return f.readline().rstrip("\n") == HEADER
+        return f.readline().rstrip("\n") == HEADER and f.readline().rstrip("\n") == surveys_header(ranks)
 
 
-def write_masks(output_file, nvm_file, mesh_file, max_concurrency, log):
-    """Find the wires of every view on every tile of the mesh and write the masks file. Returns a summary dict."""
+def view_ranks(nvm_file, survey_of):
+    """[PATCH10] the survey rank of every NVM view (same order), from filename -> rank; None for one survey."""
+    if not survey_of or len(set(survey_of.values())) < 2:
+        return None
+    ranks = []
+    for v in read_nvm(nvm_file):
+        n = v['name']
+        r = survey_of.get(n)
+        cut = len(n)
+        while r is None and cut > 0:
+            cut = n.rfind('.', 0, cut)
+            if cut <= 0:
+                break
+            r = survey_of.get(n[:cut])
+        ranks.append(r if r is not None else 0)
+    return ranks
+
+
+def write_masks(output_file, nvm_file, mesh_file, max_concurrency, log, ranks=None):
+    """Find the wires of every view on every tile of the mesh and write the masks file. Returns a summary dict.
+    ranks: [PATCH10] survey of every NVM view (view_ranks), or None for one survey."""
     started = time.time()
     views = read_nvm(nvm_file)
     sizes = [image_size(v['path']) for v in views]
@@ -270,7 +313,9 @@ def write_masks(output_file, nvm_file, mesh_file, max_concurrency, log):
     entries = []
     done = 0
     shares = []
-    with ProcessPoolExecutor(max_workers=workers, initializer=_init, initargs=(views, sizes, vertices)) as pool:
+    if ranks is not None:
+        log.INFO("[PATCH10] Overhead wires: each photo compared only with photos of its own survey (%d surveys)" % len(set(ranks)))
+    with ProcessPoolExecutor(max_workers=workers, initializer=_init, initargs=(views, sizes, vertices, ranks)) as pool:
         for result in pool.map(_run, jobs):
             for tx, ty, masks in result:
                 for i, bits, share in masks:
@@ -298,7 +343,7 @@ def write_masks(output_file, nvm_file, mesh_file, max_concurrency, log):
             f.write(bits)
     os.replace(tmp, output_file)
     with open(output_file + ".txt", "w") as f:
-        f.write(HEADER + "\n")
+        f.write(HEADER + "\n" + surveys_header(ranks) + "\n")
 
     analysed = len(set((e[0], e[1]) for e in entries))
     summary = {'views': len(views), 'tiles': len(tiles), 'analysed': analysed, 'masks': len(entries),

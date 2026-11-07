@@ -98,6 +98,10 @@ rerun_stages = {
     'split_overlap': 'split',
     'texturing_keep_unseen_faces': 'mvs_texturing',
     'gcp_texture_size': 'mvs_texturing',
+    'gcp_texture_size_older': 'mvs_texturing',
+    'gcp_texture_min_score': 'mvs_texturing',
+    'survey_max_angle': 'mvs_texturing',
+    'orthophoto_mix_surveys': 'mvs_texturing',
     'orthophoto_keep_vehicles': 'mvs_texturing',
     'orthophoto_keep_wires': 'mvs_texturing',
     'texturing_single_material': 'mvs_texturing',
@@ -579,8 +583,44 @@ def config(argv=None, parser=None):
                         default=2.0,
                         type=float,
                         help=('Side in meters of the square around each GCP that the orthophoto takes from one of the photos '
-                              'the GCP is marked in, so that every GCP stays visible. Set to 0 to let the texturing choose as usual. '
+                              'the GCP is marked in, so that every GCP stays visible. Set to 0 to let the texturing choose as usual '
+                              '(no square; the GCP still places the survey). With photos of several surveys this is the size of the '
+                              'squares from the newest survey; see gcp-texture-size-older for the older ones. '
                               'Default: %(default)s'))
+
+    parser.add_argument('--gcp-texture-size-older',
+                        metavar='<float >= 0.0>',
+                        action=StoreValue,
+                        default=2.0,
+                        type=float,
+                        help=('With photos of several surveys (months): side in meters of the square around a GCP when its '
+                              'photo comes from an older survey than the newest one at that spot. Set to 0 to show the newest '
+                              'survey there: the GCP still places the survey. Default: %(default)s'))
+
+    parser.add_argument('--gcp-texture-min-score',
+                        metavar='<float >= 0.0>',
+                        action=StoreValue,
+                        default=0.6,
+                        type=float,
+                        help=('With photos of several surveys (months): the GCP square comes from the newest survey whose best '
+                              'marked photo scores at least this much (sharpness, clean, straight down, centre; about 0.8 to 1.1 '
+                              'for a good photo), else from the best photo of any survey. Default: %(default)s'))
+
+    parser.add_argument('--survey-max-angle',
+                        metavar='<float>',
+                        action=StoreValue,
+                        default=25.0,
+                        type=float,
+                        help=('With photos of several surveys (months, from the photo dates): each spot of the orthophoto and '
+                              'the textured model is painted from the newest survey that sees it within this angle from straight '
+                              'down; near the edge of a newer survey an older one takes over. Default: %(default)s'))
+
+    parser.add_argument('--orthophoto-mix-surveys',
+                        action=StoreTrue,
+                        nargs=0,
+                        default=False,
+                        help=('Texture with the photos of all surveys (months) together, as before: each spot from whichever photo '
+                              'looks most straight down, whatever its date. By default the newest survey is shown. Default: %(default)s'))
 
     parser.add_argument('--orthophoto-keep-vehicles',
                         action=StoreTrue,

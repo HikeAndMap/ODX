@@ -16,6 +16,12 @@ at the same scale and orientation (around the mark, with the camera's local proj
   some photos stands out); 1 for the cleanest candidate,
 - straight down: viewing angle from vertical, 0 at MAX_VIEWING_ANGLE,
 - centre: the mark's distance from the image centre (tie-breaker).
+
+[PATCH10] With photos of several surveys (months, see surveys.py) the square comes from the newest survey with a marked
+photo scoring at least min_score; only when none of the newest does, the best photo of any survey. Each survey's photos
+are compared with each other for "clean" (the ground may have changed between surveys). A square whose photo is older
+than the newest survey seeing the GCP's spot within max_angle is an older survey's square: it gets size_older instead
+(0 = no square: the GCP still places the survey, but the orthophoto shows the newest survey there).
 """
 
 import os
@@ -144,13 +150,47 @@ def gcp_label(entries):
     return "gcp_%.3f_%.3f" % (e.x, e.y)
 
 
-def write_forced_views(output_file, reconstruction, images_path, nvm_file, size, max_workers):
+def newest_rank_seeing(g, cameras, photos, survey_of, max_angle):
+    """[PATCH10] The newest survey (lowest rank) with a photo that sees ground point g within max_angle of straight down."""
+    best = None
+    for filename, photo in photos.items():
+        rank = survey_of.get(filename)
+        if rank is None or (best is not None and rank >= best) or not photo.width or not photo.height:
+            continue
+        name = nvm_name_of(filename, cameras)
+        if name is None:
+            continue
+        focal, rotation, c = cameras[name]
+        d = c - g
+        distance = float(np.linalg.norm(d))
+        if distance <= 0 or math.degrees(math.acos(max(-1.0, min(1.0, d[2] / distance)))) > max_angle:
+            continue
+        x = rotation.dot(g - c)
+        if x[2] <= 0:
+            continue
+        focal_px = (photo.focal_ratio * max(photo.width, photo.height)) if photo.focal_ratio else focal
+        u, v = focal_px * x[0] / x[2], focal_px * x[1] / x[2]
+        if abs(u) <= photo.width / 2.0 and abs(v) <= photo.height / 2.0:
+            best = rank
+    return best
+
+
+def write_forced_views(output_file, reconstruction, images_path, nvm_file, size, max_workers,
+                       survey_of=None, labels=None, size_older=None, min_score=0.0, max_angle=25.0):
     """
     Writes the squares file for texrecon's --forced_views option.
 
     :param size side of the square around each GCP, in metres
+    :param survey_of [PATCH10] filename -> survey rank (0 = the newest), with labels the survey names; None = one survey
+    :param size_older [PATCH10] side of the square when its photo is older than the newest survey there (0 = none)
+    :param min_score [PATCH10] the newest survey's best photo must score this much, else the best of any survey is taken
     :return number of squares written
     """
+    several = survey_of is not None and labels is not None and len(labels) > 1
+    if size_older is None or not several:
+        size_older = size
+    # the photos are compared on a square of this size (the GCP squares themselves may be smaller or none)
+    cut_size = size if size > 0 else (size_older if size_older > 0 else 2.0)
     cameras = read_nvm_cameras(nvm_file)
     photos = {p.filename: p for p in reconstruction.photos}
     off_x, off_y = reconstruction.georef.utm_east_offset, reconstruction.georef.utm_north_offset
@@ -197,13 +237,12 @@ def write_forced_views(output_file, reconstruction, images_path, nvm_file, size,
     jobs = [c for (_, found, _, _) in candidates.values() for c in found]
     def cut(c):
         e = c['entry']
-        c['patch'] = common_patch(os.path.join(images_path, e.filename), e.px, e.py, c['jacobian'], size)
+        c['patch'] = common_patch(os.path.join(images_path, e.filename), e.px, e.py, c['jacobian'], cut_size)
     with ThreadPoolExecutor(max_workers=max(1, max_workers)) as executor:
         list(executor.map(cut, jobs))
 
     lines = ["# PATCH4: one square per GCP: label image_name xmin ymin xmax ymax (mesh coordinates = UTM minus the offset %s %s)" % (off_x, off_y)]
     written = 0
-    half_size = size / 2.0
     for key, (g, found, num_marked, num_reconstructed) in sorted(candidates.items(), key=lambda kv: gcp_label(gcps[kv[0]])):
         label = gcp_label(gcps[key])
         found = [c for c in found if c['patch'] is not None]
@@ -213,33 +252,63 @@ def write_forced_views(output_file, reconstruction, images_path, nvm_file, size,
 
         for c in found:
             c['sharpness'] = float(cv2.Laplacian(cv2.cvtColor(c['patch'], cv2.COLOR_BGR2GRAY), cv2.CV_64F).var())
+            c['rank'] = survey_of.get(c['entry'].filename, 0) if several else 0
         best_sharpness = max(c['sharpness'] for c in found) or 1.0
 
-        if len(found) >= 3:
-            z = [standardized(c['patch']) for c in found]
-            median = np.median(np.stack(z), axis=0)
-            for c, zc in zip(found, z):
-                c['clutter'] = float(np.abs(zc - median).mean())
-            least = min(c['clutter'] for c in found)
-            for c in found:
-                c['clean'] = (least + 0.05) / (c['clutter'] + 0.05)
-        else:
-            for c in found:
-                c['clean'] = 1.0
+        # [PATCH10] "clean" within each survey: the ground may have changed from one survey to the next
+        for rank in set(c['rank'] for c in found):
+            group = [c for c in found if c['rank'] == rank]
+            if len(group) >= 3:
+                z = [standardized(c['patch']) for c in group]
+                median = np.median(np.stack(z), axis=0)
+                for c, zc in zip(group, z):
+                    c['clutter'] = float(np.abs(zc - median).mean())
+                least = min(c['clutter'] for c in group)
+                for c in group:
+                    c['clean'] = (least + 0.05) / (c['clutter'] + 0.05)
+            else:
+                for c in group:
+                    c['clean'] = 1.0
 
         for c in found:
             c['sharpness_rel'] = c['sharpness'] / best_sharpness
             c['score'] = (WEIGHT_SHARPNESS * c['sharpness_rel'] + WEIGHT_CLEAN * c['clean'] +
                           WEIGHT_VERTICAL * c['vertical'] + WEIGHT_CENTRE * c['centre'])
-        best = max(found, key=lambda c: c['score'])
+
+        # [PATCH10] the newest survey whose best photo scores at least min_score, else the best photo of any survey
+        best = None
+        for rank in sorted(set(c['rank'] for c in found)):
+            candidate = max((c for c in found if c['rank'] == rank), key=lambda c: c['score'])
+            if candidate['score'] >= min_score:
+                best = candidate
+                break
+        below = best is None
+        if below:
+            best = max(found, key=lambda c: c['score'])
         e = best['entry']
 
-        lines.append("%s %s %.3f %.3f %.3f %.3f" % (label, e.filename, g[0] - half_size, g[1] - half_size, g[0] + half_size, g[1] + half_size))
-        summary = ("score %.2f: sharpness %.2f, clean %.2f, %.1f deg from vertical, mark %.0f %% from the image centre; "
-                   "%s of %s marked photos compared" % (best['score'], best['sharpness_rel'], best['clean'], best['angle'],
+        square = size
+        older = False
+        survey_note = ""
+        if several:
+            newest_here = newest_rank_seeing(g, cameras, photos, survey_of, max_angle)
+            older = newest_here is not None and best['rank'] > newest_here
+            survey_note = "survey %s%s%s, " % (labels[best['rank']],
+                                                " (older than %s, the newest here)" % labels[newest_here] if older else "",
+                                                ", no photo of a newer survey scores %.2f" % min_score if below and best['rank'] > 0 else "")
+            if older:
+                square = size_older
+        summary = ("%sscore %.2f: sharpness %.2f, clean %.2f, %.1f deg from vertical, mark %.0f %% from the image centre; "
+                   "%s of %s marked photos compared" % (survey_note, best['score'], best['sharpness_rel'], best['clean'], best['angle'],
                                                         best['from_centre'] * 100, len(found), num_marked))
+        if square <= 0:
+            log.INFO("[PATCH10] %s: no square (%s is 0), the GCP still places the survey (%s: %s)" % (
+                label, "gcp-texture-size-older" if older else "gcp-texture-size", e.filename, summary))
+            continue
+        half = square / 2.0
+        lines.append("%s %s %.3f %.3f %.3f %.3f" % (label, e.filename, g[0] - half, g[1] - half, g[0] + half, g[1] + half))
         lines.append("#   " + summary)
-        log.INFO("[PATCH4] %s: %s (%s)" % (label, e.filename, summary))
+        log.INFO("[PATCH4] %s: %s (%s%s)" % (label, e.filename, summary, "; square %.1f m" % square if square != size else ""))
         written += 1
 
     with open(output_file, 'w') as f:

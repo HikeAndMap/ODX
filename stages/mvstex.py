@@ -11,6 +11,7 @@ from modules.objpacker import obj_pack
 from modules import gcp_texture
 from modules import vehicle_boxes
 from modules import wire_masks
+from modules import surveys
 from modules import ai
 from modules.run_timing import timing as run_timing
 
@@ -69,6 +70,12 @@ class ODMMvsTexStage(types.ODM_Stage):
         progress_per_run = 100.0 / len(nonloc.runs)
         progress = 0.0
 
+        # [PATCH10] the surveys (months) of the photos; with more than one, each spot is painted from the newest
+        survey_of, survey_labels = surveys.survey_ranks(reconstruction)
+        several_surveys = len(survey_labels) > 1 and not args.orthophoto_mix_surveys and not reconstruction.multi_camera
+        if len(survey_labels) > 1 and args.orthophoto_mix_surveys:
+            log.INFO("[PATCH10] orthophoto-mix-surveys is set: the %d surveys (%s) are textured together" % (len(survey_labels), ", ".join(survey_labels)))
+
         # [PATCH7] the vehicles and people in the photos of the primary band, found once for all its texturing runs and
         # reused while the undistorted photos stay the same
         masked_boxes_file = None
@@ -104,11 +111,12 @@ class ODMMvsTexStage(types.ODM_Stage):
             log.INFO("[PATCH8] orthophoto-keep-wires is set: overhead wires are textured as the photos show them")
         else:
             masked_ground_file = os.path.join(os.path.dirname(nadir_run['nvm_file']), "wire_masks.bin")
-            if wire_masks.is_current(masked_ground_file, [nadir_run['nvm_file'], nadir_run['model']]):
+            ranks = wire_masks.view_ranks(nadir_run['nvm_file'], survey_of) if several_surveys else None
+            if wire_masks.is_current(masked_ground_file, [nadir_run['nvm_file'], nadir_run['model']], ranks):
                 log.INFO("[PATCH8] Using the overhead wires found earlier for these photos: %s" % masked_ground_file)
             else:
                 with run_timing.measure('[PATCH8] overhead wires'):
-                    wire_masks.write_masks(masked_ground_file, nadir_run['nvm_file'], nadir_run['model'], args.max_concurrency, log)
+                    wire_masks.write_masks(masked_ground_file, nadir_run['nvm_file'], nadir_run['model'], args.max_concurrency, log, ranks)
 
         for r in nonloc.runs:
             if not io.dir_exists(r['out_dir']):
@@ -137,15 +145,31 @@ class ODMMvsTexStage(types.ODM_Stage):
                     nadir = '--nadir_mode'
 
                 # PATCH4: the orthophoto shows every GCP from one of the photos it is marked in
+                # [PATCH10] from the newest survey with a good photo; an older survey's square gets gcp-texture-size-older
+                ortho_run = r['primary'] and (r['nadir'] or args.use_3dmesh)
                 forcedViews = ""
-                if r['primary'] and (r['nadir'] or args.use_3dmesh) and args.gcp_texture_size > 0 and reconstruction.has_gcp():
+                if ortho_run and (args.gcp_texture_size > 0 or (several_surveys and args.gcp_texture_size_older > 0)) and reconstruction.has_gcp():
                     forced_views_file = os.path.join(r['out_dir'], "gcp_forced_views.txt")
                     try:
                         if gcp_texture.write_forced_views(forced_views_file, reconstruction, tree.dataset_raw, r['nvm_file'],
-                                                          args.gcp_texture_size, args.max_concurrency) > 0:
+                                                          args.gcp_texture_size, args.max_concurrency,
+                                                          survey_of=survey_of if several_surveys else None, labels=survey_labels,
+                                                          size_older=args.gcp_texture_size_older, min_score=args.gcp_texture_min_score,
+                                                          max_angle=args.survey_max_angle) > 0:
                             forcedViews = '--forced_views="%s"' % forced_views_file
                     except Exception as e:
                         log.WARNING("[PATCH4] Cannot choose the GCP photos, texturing as usual: %s" % str(e))
+
+                # [PATCH10] the survey and role (edge / reserve) of every photo, for texrecon
+                viewSurveys = ""
+                if r['primary'] and several_surveys:
+                    view_surveys_file = os.path.join(r['out_dir'], "view_surveys.txt")
+                    try:
+                        if surveys.write_view_surveys(view_surveys_file, reconstruction, r['nvm_file'], r['model'],
+                                                      args.survey_max_angle, log) > 1:
+                            viewSurveys = '--view_surveys="%s" --survey_max_angle=%s' % (view_surveys_file, args.survey_max_angle)
+                    except Exception as e:
+                        log.WARNING("[PATCH10] Cannot work out the surveys of the photos, texturing them together: %s" % str(e))
 
                 # mvstex definitions
                 kwargs = {
@@ -165,7 +189,9 @@ class ODMMvsTexStage(types.ODM_Stage):
                     'labelingFile': '-L "%s"' % r['labeling_file'] if r['labeling_file'] else '',
                     'forcedViews': forcedViews,
                     'maskedBoxes': '--masked_boxes="%s"' % masked_boxes_file if (r['primary'] and masked_boxes_file) else '',
-                    'maskedGround': '--masked_ground="%s"' % masked_ground_file if (r['primary'] and r['nadir'] and masked_ground_file) else ''
+                    'maskedGround': '--masked_ground="%s"' % masked_ground_file if (r['primary'] and r['nadir'] and masked_ground_file) else '',
+                    'viewSurveys': viewSurveys,
+                    'writeLabeling': '--write_labeling' if ortho_run else ''
                 }
 
                 mvs_tmp_dir = os.path.join(r['out_dir'], 'tmp')
@@ -187,8 +213,20 @@ class ODMMvsTexStage(types.ODM_Stage):
                         '{forcedViews} '
                         '{maskedBoxes} '
                         '{maskedGround} '
+                        '{viewSurveys} '
+                        '{writeLabeling} '
                         '{numThreads} '
                         '{maxTextureSize} '.format(**kwargs))
+
+                # [PATCH10] which survey, day and flight painted which ground: odm_report/orthophoto_sources.gpkg
+                if ortho_run:
+                    try:
+                        if not io.dir_exists(tree.odm_report):
+                            system.mkdir_p(tree.odm_report)
+                        surveys.write_sources(os.path.join(tree.odm_report, surveys.SOURCES_FILE),
+                                              os.path.join(r['out_dir'], "odm_textured_model_geo"), reconstruction, log)
+                    except Exception as e:
+                        log.WARNING("[PATCH10] Cannot write the source layer of the orthophoto: %s" % str(e))
 
                 if r['primary'] and (not r['nadir'] or args.skip_3dmodel):
                     # Single material?
