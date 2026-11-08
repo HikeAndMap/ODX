@@ -55,6 +55,7 @@ class OSFMContext:
         reconstruction_file = os.path.join(self.opensfm_project_path, 'reconstruction.json')
         if not io.file_exists(reconstruction_file) or rerun:
             self.run(f'reconstruct --algorithm {algorithm}')
+            self.record_reconstruction_timing()
             if merge_partial:
                 self.check_merge_partial_reconstructions()
         else:
@@ -83,6 +84,35 @@ class OSFMContext:
                 self.touch(rs_file)
             else:
                 log.WARNING("Rolling shutter correction already applied")
+
+    def record_reconstruction_timing(self):
+        """[PATCH9] Where the time of the reconstruction went, from OpenSfM's report (reports/reconstruction.json, written
+        by our OpenSfM): the parts of the loop that adds photo after photo (global and local adjustments,
+        re-triangulation, ...) and the final adjustment with the GCPs. Stored with the stage's timing in stats.json."""
+        from modules.run_timing import timing as run_timing
+        path = os.path.join(self.opensfm_project_path, 'reports', 'reconstruction.json')
+        try:
+            with open(path, 'r') as f:
+                rep = json.load(f)
+            parts = []
+            for rec in rep.get('reconstructions') or []:
+                grow = rec.get('grow') or {}
+                inner = grow.get('grow') or {}
+                entry = {}
+                if isinstance(inner.get('timing'), dict):
+                    entry['grow'] = inner['timing']
+                if 'final_bundle_seconds' in grow:
+                    entry['final_bundle_seconds'] = grow['final_bundle_seconds']
+                    entry['final_bundle_gcp_count'] = grow.get('final_bundle_gcp_count')
+                if entry:
+                    parts.append(entry)
+            if parts:
+                run_timing.add_detail('reconstruction', {'version': 1, 'wall_times': rep.get('wall_times'),
+                                                         'reconstructions': parts})
+            else:
+                log.INFO("[PATCH9] OpenSfM's report holds no reconstruction timing (an OpenSfM without it)")
+        except Exception as e:
+            log.WARNING("[PATCH9] Could not read the reconstruction timing from %s: %s" % (path, e))
 
     def check_merge_partial_reconstructions(self):
         if self.reconstructed():

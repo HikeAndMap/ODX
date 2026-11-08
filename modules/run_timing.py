@@ -82,6 +82,12 @@ class RunTiming:
             if self._current is not None:
                 self._stages[self._current]['steps'].append(entry)
 
+    def add_detail(self, key, value):
+        """Extra figures of the current stage under 'details' (the parts of OpenSfM's reconstruction)."""
+        with self._lock:
+            if self._current is not None:
+                self._stages[self._current].setdefault('details', {})[key] = value
+
     @contextmanager
     def measure(self, name):
         """Time one of our own steps (kind 'patch')."""
