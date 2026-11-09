@@ -9,7 +9,7 @@ ExternalProject_Add(${_proj_name}
   #--Download step--------------
   DOWNLOAD_DIR      ${SB_DOWNLOAD_DIR}/${_proj_name}
   GIT_REPOSITORY    https://github.com/HikeAndMap/mvs-texturing
-  GIT_TAG           1cbc69e0ac83bf4670b7f5d07106b8b22114269a
+  GIT_TAG           65a75a055dc9ce450b04cb5cbac4a6397c98b088
   #--Update/Patch step----------
   UPDATE_COMMAND    ""
   #--Configure step-------------
