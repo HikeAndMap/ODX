@@ -98,7 +98,9 @@ def run(cmd, env_paths=[context.superbuild_bin_path], env_vars={}, packages_path
     running_subprocesses.append(p)
     lines = deque()
     for line in io.TextIOWrapper(p.stdout):
-        print(line, end="")
+        # [PATCH9] passed on at once: stdout to NodeODX is a pipe, block-buffered (about 8 KB), so a quiet step held back the
+        # lines before it for hours and a working program looked stuck
+        print(line, end="", flush=True)
 
         lines.append(line.strip())
         if len(lines) == 11:
