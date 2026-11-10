@@ -55,10 +55,13 @@ GROW = 2                    # cells
 CACHE = 48                  # photos kept decoded per worker
 MAGIC = b'HAMWIRE2'         # v2: every mask is followed by its checked cells (v1, HAMWIRE1: the whole tile was checked)
 BIG = 1.0e6
+BLACK_MARGIN = 2            # cells round the black fill of an undistorted photo also left out (its edge is blurred)
+FIT_MIN_SPREAD = 2.0        # grey levels: a photo flatter than this over the shared cells gets only an offset
+FIT_GAIN = (0.25, 4.0)      # a fitted gain outside this range is not trusted either
 
 HEADER = ("# [PATCH8] wire masks v2: tile %d x %.3f m, mask %d, max %.0f deg per cell, refs %d-%d, min %d, tol %d, thr %.0f, "
-          "minlen %.2f, grow %d") % (TILE_CELLS, CELL, MASK_FACTOR, MAX_ANGLE, REF_VIEWS, REF_VIEWS_MAX, MIN_VIEWS, TOL, THR,
-                                     MINLEN, GROW)
+          "minlen %.2f, grow %d, black fill out %d") % (TILE_CELLS, CELL, MASK_FACTOR, MAX_ANGLE, REF_VIEWS, REF_VIEWS_MAX,
+                                                       MIN_VIEWS, TOL, THR, MINLEN, GROW, BLACK_MARGIN)
 
 
 def quaternion_to_rotation(qw, qx, qy, qz):
@@ -197,12 +200,19 @@ def even_out(Ls, ref, valids=None):
     for L, m in zip(Ls, valids):
         ls, lw = blocks(L, m)
         use = (rw > 0.9) & (lw > 0.9)
-        if use.sum() >= 50:
-            a, b = np.polyfit(ls[use].ravel(), rs[use].ravel(), 1)
-        elif use.any():
-            a, b = 1.0, float(np.median(rs[use] - ls[use]))
-        else:
-            a, b = 1.0, 0.0
+        a, b = 1.0, 0.0
+        if use.any():
+            x, y = ls[use].ravel().astype(np.float64), rs[use].ravel().astype(np.float64)
+            b = float(np.median(y - x))
+            # a straight-line fit only where the photo varies over the shared cells: on a flat patch (all black: numpy
+            # raises "SVD did not converge"; nearly flat: a meaningless gain) only the offset is matched
+            if len(x) >= 50 and np.std(x) > FIT_MIN_SPREAD:
+                try:
+                    fa, fb = np.polyfit(x, y, 1)
+                    if np.isfinite(fa) and np.isfinite(fb) and FIT_GAIN[0] <= fa <= FIT_GAIN[1]:
+                        a, b = float(fa), float(fb)
+                except (np.linalg.LinAlgError, ValueError):
+                    pass
         out.append((a * L + b).astype(np.float32))
     return out
 
@@ -279,6 +289,12 @@ class _Worker:
             img = self.image(i, reduce)
             L = cv2.remap(img, (u / reduce).astype(np.float32), (v / reduce).astype(np.float32),
                           cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE).astype(np.float32)
+            # the black fill of the undistorted photo (where the lens correction reaches past the picture) is not seen
+            # ground: left out with a margin, so that its edge is never taken for a wire
+            black = (L < 1.0).astype(np.uint8)
+            if black.any():
+                black = cv2.dilate(black, np.ones((2 * BLACK_MARGIN + 1, 2 * BLACK_MARGIN + 1), np.uint8))
+                valid &= black == 0
             L[~valid] = np.nan
             Ls.append(L)
             valids.append(valid)
@@ -333,7 +349,11 @@ def _run(job):
     tiles, x_min, y_min = job
     result = []
     for tx, ty in tiles:
-        result.append((tx, ty, _worker.tile(tx, ty, x_min, y_min)))
+        try:
+            result.append((tx, ty, _worker.tile(tx, ty, x_min, y_min), None))
+        except Exception as e:
+            # one tile that fails never stops the run: it gets no masks (texrecon treats it as not checked)
+            result.append((tx, ty, [], "%s: %s" % (type(e).__name__, e)))
     return result
 
 
@@ -401,11 +421,15 @@ def write_masks(output_file, nvm_file, mesh_file, max_concurrency, log, ranks=No
     entries = []
     done = 0
     shares = []
+    failed = []
     if ranks is not None:
         log.INFO("[PATCH10] Overhead wires: each photo compared only with photos of its own survey (%d surveys)" % len(set(ranks)))
     with ProcessPoolExecutor(max_workers=workers, initializer=_init, initargs=(views, sizes, vertices, ranks)) as pool:
         for result in pool.map(_run, jobs):
-            for tx, ty, masks in result:
+            for tx, ty, masks, error in result:
+                if error is not None:
+                    failed.append((tx, ty, error))
+                    log.WARNING("[PATCH8] Overhead wires: tile %d,%d skipped, left unchecked (%s)" % (tx, ty, error))
                 for i, bits, checked_bits, share, checked in masks:
                     entries.append((tx, ty, i, bits, checked_bits))
                     shares.append((share, checked))
@@ -439,9 +463,12 @@ def write_masks(output_file, nvm_file, mesh_file, max_concurrency, log, ranks=No
     wire_share = float(np.sum([s * c for s, c in shares]) / max(1e-9, weights.sum())) if shares else 0.0
     summary = {'views': len(views), 'tiles': len(tiles), 'analysed': analysed, 'masks': len(entries),
                'wire_share': wire_share, 'checked_share': float(weights.mean()) if shares else 0.0,
-               'minutes': (time.time() - started) / 60.0}
+               'minutes': (time.time() - started) / 60.0, 'failed': len(failed)}
     log.INFO("[PATCH8] Overhead wires: %s masks on %s of %s tiles (each photo checked on %.0f %% of its tiles on average), "
              "wires on %.1f %% of the checked photo area, took %.0f min" % (
                  summary['masks'], analysed, len(tiles), 100 * summary['checked_share'], 100 * summary['wire_share'],
                  summary['minutes']))
+    if failed:
+        log.WARNING("[PATCH8] Overhead wires: %d tile(s) skipped after an error, left unchecked (first: tile %d,%d, %s)" % (
+            len(failed), failed[0][0], failed[0][1], failed[0][2]))
     return summary
