@@ -14,7 +14,7 @@ from modules.point_cloud import export_info_json
 from modules.cropper import Cropper
 from modules.orthophoto import get_orthophoto_vars, get_max_memory, generate_png
 from modules.memory_monitor import monitor as memory_monitor, gib
-from modules.run_timing import timing as run_timing, hms
+from modules.run_timing import timing as run_timing, hms as patch9_hms  # ODX's own hms() below would shadow it
 from modules.tiles.tiler import generate_colored_hillshade
 from modules.utils import get_raster_stats, np_from_json
 
@@ -161,9 +161,9 @@ class ODMReport(types.ODM_Stage):
                     steps = [st for s in timing_stats['stages'] for st in (s.get('steps') or [])]
                     longest = sorted(steps, key=lambda st: st.get('seconds') or 0, reverse=True)[:3]
                     log.INFO("[PATCH9] Time per stage recorded (%s stages, %s steps, %s measured%s); longest steps: %s" % (
-                        len(timing_stats['stages']), len(steps), hms(timing_stats['total_seconds']),
+                        len(timing_stats['stages']), len(steps), patch9_hms(timing_stats['total_seconds']),
                         ', with an earlier run of this task' if timing_stats.get('merged_with_earlier_run') else '',
-                        ', '.join('%s %s' % (st['name'], hms(st.get('seconds'))) for st in longest) or 'none'))
+                        ', '.join('%s %s' % (st['name'], patch9_hms(st.get('seconds'))) for st in longest) or 'none'))
 
                 # Add CODEM stats
                 if os.path.exists(codem_stats_json):
