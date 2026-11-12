@@ -11,6 +11,7 @@ from modules.objpacker import obj_pack
 from modules import gcp_texture
 from modules import vehicle_boxes
 from modules import wire_masks
+from modules import wire_ground
 from modules import surveys
 from modules import ai
 from modules.run_timing import timing as run_timing
@@ -117,6 +118,17 @@ class ODMMvsTexStage(types.ODM_Stage):
             else:
                 with run_timing.measure('[PATCH8] overhead wires'):
                     wire_masks.write_masks(masked_ground_file, nadir_run['nvm_file'], nadir_run['model'], args.max_concurrency, log, ranks)
+            # roofs and roof edges left out of the masks (wire_ground.py): wires are kept out on the ground only
+            ground_file = os.path.join(os.path.dirname(nadir_run['nvm_file']), "wire_masks_ground.bin")
+            smrf = (args.smrf_scalar, args.smrf_slope, args.smrf_threshold, args.smrf_window)
+            if wire_ground.is_current(ground_file, [masked_ground_file, nadir_run['model'], tree.filtered_point_cloud], smrf):
+                log.INFO("[PATCH8] Using the roofs found earlier: %s" % ground_file)
+                masked_ground_file = ground_file
+            else:
+                with run_timing.measure('[PATCH8] roofs left out'):
+                    if wire_ground.write_cleared(ground_file, masked_ground_file, nadir_run['model'], tree.filtered_point_cloud,
+                                                 smrf, args.max_concurrency, log):
+                        masked_ground_file = ground_file
 
         for r in nonloc.runs:
             if not io.dir_exists(r['out_dir']):
