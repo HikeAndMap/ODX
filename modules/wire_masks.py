@@ -13,6 +13,11 @@
 # GROW cells. The result is a mask per photo and tile, in mesh coordinates, which texrecon reads (--masked_ground): a face
 # is not painted from a photo whose mask has a wire under it, as long as a photo without one sees it.
 #
+# Only thin differences count: every photo and the median are compared after their local mean over HIGHPASS is taken
+# off (a high-pass filter). A wire is a few centimetres wide and stays; a broad difference (sun and cloud between
+# flights, a shadow that moved, another exposure, the body of a vehicle) drops out, and only its outline can remain. On
+# a tile round a pole in New Lucban the marked ground went from 39 % to 24 % of each photo, with every cable still marked.
+#
 # Each cell is checked on its own: a photo counts for a cell when it sees that cell within MAX_ANGLE, and a cell is
 # checked when at least MIN_VIEWS of the reference photos do. (Until v2 a photo had to see the whole tile within the
 # angle, and a tile needed MIN_VIEWS of those: photos taken 20 to 35 m above a hillside each show only part of a 19.2 m
@@ -44,6 +49,7 @@ REF_VIEWS_MAX = 40          # where the first REF_VIEWS leave cells that more ph
 MIN_VIEWS = 5
 SAMPLES = 5                 # SAMPLES x SAMPLES points of a tile: a photo that sees none of them within the angle is left out
 TOL = 2                     # cells of misalignment tolerated
+HIGHPASS = 0.10             # metres: broader differences than this are left out of the comparison
 THR = 16.0                  # grey levels
 MINLEN = 0.3                # metres
 GROW = 2                    # cells
@@ -60,8 +66,9 @@ FIT_MIN_SPREAD = 2.0        # grey levels: a photo flatter than this over the sh
 FIT_GAIN = (0.25, 4.0)      # a fitted gain outside this range is not trusted either
 
 HEADER = ("# [PATCH8] wire masks v2: tile %d x %.3f m, mask %d, max %.0f deg per cell, refs %d-%d, min %d, tol %d, thr %.0f, "
-          "minlen %.2f, grow %d, black fill out %d") % (TILE_CELLS, CELL, MASK_FACTOR, MAX_ANGLE, REF_VIEWS, REF_VIEWS_MAX,
-                                                       MIN_VIEWS, TOL, THR, MINLEN, GROW, BLACK_MARGIN)
+          "minlen %.2f, grow %d, black fill out %d, highpass %.2f m") % (TILE_CELLS, CELL, MASK_FACTOR, MAX_ANGLE, REF_VIEWS,
+                                                                       REF_VIEWS_MAX, MIN_VIEWS, TOL, THR, MINLEN, GROW,
+                                                                       BLACK_MARGIN, HIGHPASS)
 
 
 def quaternion_to_rotation(qw, qx, qy, qz):
@@ -140,6 +147,17 @@ def tile_heights(vertices, x0, y1):
     if bad.any():
         z[bad] = NearestNDInterpolator(v[:, :2], v[:, 2])(gx[bad], gy[bad])
     return cv2.resize(z.astype(np.float32), (TILE_CELLS, TILE_CELLS), interpolation=cv2.INTER_LINEAR)
+
+
+def highpass(L, valid):
+    """L minus its local mean over about HIGHPASS (from the valid cells only), NaN outside valid: compared this way, a
+    thin wire stays and a broad difference in light or shadow drops out."""
+    s = HIGHPASS / CELL
+    num = cv2.GaussianBlur(np.where(valid, L, 0).astype(np.float32), (0, 0), s)
+    den = cv2.GaussianBlur(valid.astype(np.float32), (0, 0), s)
+    out = (L - num / np.maximum(den, 1e-3)).astype(np.float32)
+    out[~valid] = np.nan
+    return out
 
 
 def median(stack):
@@ -319,6 +337,7 @@ class _Worker:
             raw = median(np.stack([sub[r] for r in refs]))
             raw[~ok] = np.nan
             sub = even_out(sub, raw, val)
+            sub = [highpass(L, v) for L, v in zip(sub, val)]
             M = median(np.stack([sub[r] for r in refs]))
             M[~ok] = np.nan
             for k, j in enumerate(group):
