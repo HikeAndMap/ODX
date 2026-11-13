@@ -155,6 +155,9 @@ class ODMMvsTexStage(types.ODM_Stage):
                     keepUnseenFaces = "--keep_unseen_faces"
                 if (r['nadir']):
                     nadir = '--nadir_mode'
+                    # [PATCH11] in nadir mode texrecon paints a steep face (a wall the 2.5D mesh made a slope) only from its
+                    # photos within 3 deg of its most straight-down one; this line also gives a build its patch level 11
+                    log.INFO("[PATCH11] Steep faces of the 2.5D mesh painted from their most straight-down photos only")
 
                 # PATCH4: the orthophoto shows every GCP from one of the photos it is marked in
                 # [PATCH10] from the newest survey with a good photo; an older survey's square gets gcp-texture-size-older
