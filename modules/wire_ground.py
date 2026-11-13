@@ -9,7 +9,10 @@
 #   - a roof: the mesh more than ROOF_HEIGHT above the ground, from a ground grid of GROUND_CELL made with PDAL's simple
 #     morphological filter (the --smrf-* settings odm_georeferencing classifies with later) on every GROUND_DECIMATION-th
 #     point of the filtered point cloud, its gaps (under buildings) filled from around them;
-#   - a roof edge: the mesh rising more than STEP_HEIGHT within STEP_DIST up to a roof, and EDGE_MARGIN around that.
+#   - a roof edge: the mesh rising more than STEP_HEIGHT within STEP_DIST up to a roof, and EDGE_MARGIN around that, as
+#     far as the mesh there is more than EDGE_LOW above the ground (the slope the mesh makes of a wall). Flat ground at
+#     the foot of a wall stays checked: with the band reaching onto the road, the wires stopped at about 1 m from the
+#     buildings in the NL roof test and went on beyond it.
 # Those cells are written as not checked in every photo, so texrecon neither drops views nor cuts faces there: a face on
 # a roof or an edge is textured as without PATCH8 (a wire over a roof stays as the photos show it).
 #
@@ -29,14 +32,16 @@ from modules import wire_masks
 ROOF_HEIGHT = 1.5           # metres above the ground
 STEP_HEIGHT = 0.5           # metres the mesh rises ...
 STEP_DIST = 0.3             # ... within this many metres: a roof edge
-EDGE_MARGIN = 0.5           # metres round a roof edge also left out
+EDGE_MARGIN = 0.5           # metres round a roof edge also left out ...
+EDGE_LOW = 0.3              # ... where the mesh is more than this above the ground
 GROUND_CELL = 1.0           # metres
 GROUND_DECIMATION = 10      # every n-th point of the point cloud for the ground
 GROUND_FILL = 300.0         # metres searched round a gap in the ground grid
 NODATA = -9999.0
 
-HEADER = ("# [PATCH8] ground only v2: roof %.1f m above the ground, edge %.2f m within %.2f m plus %.2f m, ground grid "
-          "%.1f m from every %d. point") % (ROOF_HEIGHT, STEP_HEIGHT, STEP_DIST, EDGE_MARGIN, GROUND_CELL, GROUND_DECIMATION)
+HEADER = ("# [PATCH8] ground only v3: roof %.1f m above the ground, edge %.2f m within %.2f m plus %.2f m where %.2f m "
+          "above the ground, ground grid %.1f m from every %d. point") % (ROOF_HEIGHT, STEP_HEIGHT, STEP_DIST, EDGE_MARGIN,
+                                                                         EDGE_LOW, GROUND_CELL, GROUND_DECIMATION)
 
 
 def smrf_header(scalar, slope, threshold, window):
@@ -125,7 +130,7 @@ def raised_cells(vertices, ground, x0, y1, tile, n):
     step = ((top - cv2.erode(H, kernel)) > STEP_HEIGHT) & ((top - ground_h) > ROOF_HEIGHT)
     r = int(math.ceil(EDGE_MARGIN / cell))
     disk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
-    edge = cv2.dilate(step.astype(np.uint8), disk) > 0
+    edge = (cv2.dilate(step.astype(np.uint8), disk) > 0) & ((H - ground_h) > EDGE_LOW)
     out = roof | edge
     return out[pad:pad + n, pad:pad + n]
 
