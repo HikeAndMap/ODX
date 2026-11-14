@@ -13,6 +13,9 @@ from modules.cutline import compute_cutline
 from modules.utils import double_quote
 from modules import pseudogeo
 from modules.multispectral import get_primary_band_name
+from modules import wire_paint
+from modules import vehicle_boxes
+from modules.run_timing import timing as run_timing
 
 
 class ODMOrthoPhotoStage(types.ODM_Stage):
@@ -108,6 +111,30 @@ class ODMOrthoPhotoStage(types.ODM_Stage):
                        '-logFile "{log}" -outputFile "{ortho}" -resolution {res} -verbose '
                        '-outputCornerFile "{corners}" {bands} {depth_idx} {inpaint} '
                        '{utm_offsets} {a_srs} {vars} {gdal_configs} '.format(**kwargs), env_vars={'OMP_NUM_THREADS': args.max_concurrency})
+
+            # [PATCH12] the ground painted pixel by pixel from the photos without a wire there (needs PATCH8's masks)
+            if reconstruction.is_georeferenced() and not reconstruction.multi_camera and not args.use_3dmesh:
+                undistorted = os.path.dirname(tree.opensfm_reconstruction_nvm)
+                masks_file = os.path.join(undistorted, "wire_masks.bin")
+                ground_file = os.path.join(undistorted, "wire_masks_ground.bin")
+                if args.orthophoto_keep_wires:
+                    log.INFO("[PATCH12] orthophoto-keep-wires is set: the ground is left as texturing painted it")
+                elif not (io.file_exists(masks_file) and io.file_exists(ground_file)):
+                    log.INFO("[PATCH12] No wire masks of this run: the ground is left as texturing painted it")
+                else:
+                    boxes_file = os.path.join(undistorted, "vehicle_boxes.txt")
+                    if args.orthophoto_keep_vehicles or not vehicle_boxes.is_current(boxes_file, tree.opensfm_reconstruction_nvm):
+                        boxes_file = None
+                    try:
+                        with run_timing.measure('[PATCH12] ground pixel by pixel'):
+                            wire_paint.paint(tree.odm_orthophoto_tif, tree.opensfm_reconstruction_nvm, tree.odm_25dmesh,
+                                             masks_file, ground_file, boxes_file,
+                                             None if args.orthophoto_mix_surveys else os.path.join(tree.odm_25dtexturing, "view_surveys.txt"),
+                                             reconstruction.georef.utm_east_offset, reconstruction.georef.utm_north_offset,
+                                             args.survey_max_angle, args.max_concurrency, log)
+                    except Exception as e:
+                        log.WARNING("[PATCH12] Cannot paint the ground pixel by pixel, the orthophoto stays as texturing "
+                                    "made it: %s" % str(e))
 
             # Create georeferenced GeoTiff
             if reconstruction.is_georeferenced():

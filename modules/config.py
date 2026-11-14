@@ -639,8 +639,9 @@ def config(argv=None, parser=None):
                         help=('Keep overhead wires in the orthophoto as the photos show them. By default every photo is '
                               'projected onto the 2.5D mesh and compared with the photos around it: a wire hangs above the '
                               'surface and lands somewhere else in each photo, so each spot is painted from a photo without '
-                              'a wire there, where such a photo exists. Markings, kerbs, roofs, shadows and GCPs lie on the '
-                              'surface and stay. Default: %(default)s'))
+                              'a wire there, where such a photo exists, and the ground of the orthophoto is then painted '
+                              'pixel by pixel from the median of the photos without a wire there. Markings, kerbs, roofs, '
+                              'shadows and GCPs lie on the surface and stay. Default: %(default)s'))
 
     parser.add_argument('--texturing-single-material',
                         action=StoreTrue,
