@@ -6,12 +6,19 @@
 # road looks patched. Yet nearly every spot of the ground is clean in many photos (on a road in the NL roof test, every
 # spot in at least 5, mostly 20 to 30).
 #
-# So after the orthophoto is made, its ground is painted again, per cell of 1.5 cm: the median colour of the photos that
-# see the cell within 25 deg of straight down, whose wire mask (wire_masks.py) checked the cell and found no wire, that
+# So after the orthophoto is made, its ground is checked against the photos, per cell of 1.5 cm: the median colour of
+# the photos that see the cell within 25 deg of straight down, whose wire mask (wire_masks.py) checked the cell and found no wire, that
 # have no vehicle box there (PATCH7) and that belong to the survey PATCH10 paints the spot from (reserve photos left out).
 # Each photo's colour is first scaled per channel to the survey's median (one exposure factor per photo; a straight-line
-# fit as the wire search uses for grey followed the wires and flattened the texture), and the result is brought to the orthophoto's own brightness over LOCAL_MEAN, so that it never stands out. Wires are
-# gone wherever enough photos are clean; a wire shadow, which lies on the road, comes out whole, from most photos.
+# fit as the wire search uses for grey followed the wires and flattened the texture), and the result is brought to
+# the orthophoto's own brightness over LOCAL_MEAN, so that it never stands out.
+#
+# Only where the orthophoto differs from that median is it painted over (v2): where it is darker by more than REPAIR_THR
+# grey levels after both lose their mean over 10 cm, beyond the median's range over REPAIR_TOL (misalignment), in pieces
+# at least REPAIR_MINLEN long, widened by REPAIR_GROW. The orthophoto is first softened by REPAIR_SOFT, to the sharpness of
+# a median of photos, so that its finer texture does not count. Everywhere else it keeps its own pixels: painting the
+# whole ground (v1) removed the wires as well but halved the fine detail of a road (a median of photos at 1.5 cm is softer
+# than the 1 cm orthophoto); repairing only the differences keeps 90 % of it (NL roof test, two roads).
 #
 # Only the ground: cells the wire search checked after roofs and roof edges were left out (wire_ground.py), and not
 # within WALL_GAP of a roof or roof edge, where the photos are projected onto the slope the mesh makes of a wall and
@@ -36,6 +43,12 @@ WALL_GAP = 0.4              # metres from a roof or roof edge where the orthopho
 FEATHER = 0.15              # ... and over which the painting fades in
 MIN_CLEAN = 3               # clean photos a cell needs
 LOCAL_MEAN = 0.3            # metres: the painting keeps the orthophoto's brightness averaged over this
+REPAIR_THR = 8.0            # grey levels the orthophoto is darker than the clean median (after both lose their mean ...
+REPAIR_HIGHPASS = 0.10      # ... over this many metres): a wire left in it
+REPAIR_TOL = 0.015          # metres of misalignment tolerated
+REPAIR_SOFT = 0.015         # metres: the orthophoto softened to the median's sharpness before the comparison
+REPAIR_MINLEN = 0.25        # metres: shorter differences are left
+REPAIR_GROW = 0.04          # metres the repaired pieces are widened
 SURVEY_GOOD = 10.0          # [PATCH10] degrees: the survey rule of texrecon (survey_good_angle, survey_angle_margin)
 SURVEY_MARGIN = 5.0
 CACHE = 16                  # photos kept decoded per worker (colour)
@@ -271,6 +284,31 @@ def exposure(Ls, ref, valids):
     return out
 
 
+def highpass(g, mask, sigma):
+    num = cv2.GaussianBlur(np.where(mask, g, 0).astype(np.float32), (0, 0), sigma)
+    den = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), sigma)
+    return g - num / np.maximum(den, 1e-3)
+
+
+def repair_mask(O, C, mask, res):
+    """Pixels (orthophoto grid, res metres) where the orthophoto O is thinly darker than the clean median C (both RGB,
+    C at O's brightness): a wire left in it."""
+    grey = lambda a: 0.299 * a[..., 0] + 0.587 * a[..., 1] + 0.114 * a[..., 2]
+    gO = cv2.GaussianBlur(grey(O), (0, 0), REPAIR_SOFT / res)
+    sig = REPAIR_HIGHPASS / res
+    hO, hC = highpass(gO, mask, sig), highpass(grey(C), mask, sig)
+    k = max(1, int(round(REPAIR_TOL / res)))
+    lo = cv2.erode(hC, np.ones((2 * k + 1, 2 * k + 1), np.uint8))
+    cand = (((lo - hO) > REPAIR_THR) & mask).astype(np.uint8)
+    num, lab, st, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
+    if num <= 1:
+        return np.zeros(mask.shape, bool)
+    keep = np.hypot(st[:, 2], st[:, 3]) * res >= REPAIR_MINLEN
+    keep[0] = False
+    r = max(1, int(round(REPAIR_GROW / res)))
+    return cv2.dilate(keep[lab].astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))) > 0
+
+
 def lowpass(a, mask, sigma):
     num = cv2.GaussianBlur(np.where(mask[..., None], a, 0).astype(np.float32), (0, 0), sigma)
     den = cv2.GaussianBlur(mask.astype(np.float32), (0, 0), sigma)[..., None]
@@ -353,18 +391,22 @@ def paint(orthophoto, nvm_file, mesh_file, masks_file, ground_file, boxes_file, 
                         if (Wt > 0).any():
                             sig = LOCAL_MEAN / res
                             Ca = C + lowpass(O, hv, sig) - lowpass(C, hv, sig)
-                            new = O * (1 - Wt[..., None]) + Ca * Wt[..., None]
-                            dst.write(np.transpose(np.clip(new + 0.5, 0, 255).astype(np.uint8), (2, 0, 1)), [1, 2, 3], window=win)
-                            painted += int((Wt > 0.5).sum())
-                            considered += int(alpha.sum())
+                            # v2: only where the orthophoto has a thin dark difference from the clean median
+                            rep = repair_mask(O, Ca, hv & (Wt > 0), res)
+                            a = cv2.GaussianBlur(rep.astype(np.float32), (0, 0), max(1.0, REPAIR_GROW / res / 2)) * Wt
+                            if (a > 0).any():
+                                new = O * (1 - a[..., None]) + Ca * a[..., None]
+                                dst.write(np.transpose(np.clip(new + 0.5, 0, 255).astype(np.uint8), (2, 0, 1)), [1, 2, 3], window=win)
+                            painted += int((a > 0.5).sum())
+                            considered += int((hv & inside & (Wt > 0)).sum())
                 if done % max(1, len(jobs) // 10) == 0 or done == len(jobs):
                     elapsed = time.time() - started
                     log.INFO("[PATCH12] Ground pixel by pixel: %d of %d tiles (%.0f min, about %.0f min left)" % (
                         done, len(jobs), elapsed / 60.0, elapsed / done * (len(jobs) - done) / 60.0))
     summary = {'tiles': len(jobs), 'painted': painted / max(1, considered), 'minutes': (time.time() - started) / 60.0,
                'failed': len(failed)}
-    log.INFO("[PATCH12] Ground painted pixel by pixel on %d tiles: %.0f %% of the orthophoto there from the median of the "
-             "photos without a wire (more than %.2f m from roofs and roof edges), took %.0f min" % (
+    log.INFO("[PATCH12] Ground checked pixel by pixel on %d tiles: %.1f %% of it repainted from the median of the photos "
+             "without a wire, where the orthophoto still had a wire (more than %.2f m from roofs and roof edges), took %.0f min" % (
                  len(jobs), 100 * summary['painted'], WALL_GAP, summary['minutes']))
     if failed:
         log.WARNING("[PATCH12] %d tile(s) not painted after an error, left as texturing made them (first: tile %d,%d, %s)" % (
