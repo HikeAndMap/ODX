@@ -12,6 +12,45 @@ from modules.osfm import OSFMContext
 from modules.multispectral import get_primary_band_name
 from modules.point_cloud import fast_merge_ply
 
+ROI_WIDEN_XY = 20.0     # [PATCH13] metres added round the sparse points sideways ...
+ROI_WIDEN_Z = 60.0      # ... and in height
+
+
+def with_sparse_roi(scene_file, openmvs_dir, depthmaps_dir, gpu_config):
+    """[PATCH13] A copy of scene_file (scene_roi.mvs) with a region of interest: the box of the scene's sparse points
+    (OpenMVS --estimate-roi 1), widened by ROI_WIDEN_XY / ROI_WIDEN_Z. Returns its path, or scene_file when no box came out.
+    Both runs use the depth-map folder as the working folder, as every other OpenMVS run here does: the saved scene stores its
+    photos' paths relative to it (without -w they were stored relative to the current folder, and the split's sub-scenes then
+    could not find a single photo)."""
+    estimated = os.path.join(openmvs_dir, "scene_roi_estimated.txt")
+    roi_file = os.path.join(openmvs_dir, "scene_roi.txt")
+    roi_scene = os.path.join(openmvs_dir, "scene_roi.mvs")
+    for f in (estimated, roi_file, roi_scene):
+        if os.path.exists(f):
+            os.remove(f)
+    system.run('"%s" "%s" --estimate-roi 1 --export-roi-file "%s" -w "%s" -v 0 %s' % (context.omvs_densify_path, scene_file, estimated, depthmaps_dir, ' '.join(gpu_config)))
+    if not os.path.exists(estimated):
+        log.WARNING("[PATCH13] OpenMVS found no region of interest for the scene; it is split as it is")
+        return scene_file
+    with open(estimated) as f:
+        v = [float(x) for x in f.read().split()]
+    rot, pos, ext = v[:9], v[9:12], v[12:15]
+    if rot != [1, 0, 0, 0, 1, 0, 0, 0, 1]:
+        log.WARNING("[PATCH13] The region of interest is rotated; the scene is split with it as estimated")
+        shutil.copyfile(estimated, roi_file)
+    else:
+        ext = [ext[0] + ROI_WIDEN_XY, ext[1] + ROI_WIDEN_XY, ext[2] + ROI_WIDEN_Z]
+        with open(roi_file, "w") as f:
+            f.write("1 0 0\n0 1 0\n0 0 1\n%s\n" % "\n".join("%.6f" % x for x in pos + ext))
+    system.run('"%s" "%s" --import-roi-file "%s" -o "%s" -w "%s" --archive-type 3 -v 0 %s' % (context.omvs_densify_path, scene_file, roi_file, roi_scene, depthmaps_dir, ' '.join(gpu_config)))
+    if not os.path.exists(roi_scene):
+        log.WARNING("[PATCH13] The region of interest could not be set; the scene is split as it is")
+        return scene_file
+    log.INFO("[PATCH13] Scene split within the region of its sparse points: x %.1f to %.1f, y %.1f to %.1f, height %.1f to %.1f"
+             % (pos[0] - ext[0], pos[0] + ext[0], pos[1] - ext[1], pos[1] + ext[1], pos[2] - ext[2], pos[2] + ext[2]))
+    return roi_scene
+
+
 class ODMOpenMVSStage(types.ODM_Stage):
     def process(self, args, outputs):
         # get inputs
@@ -131,6 +170,17 @@ class ODMOpenMVSStage(types.ODM_Stage):
             if pc_tile:
                 log.INFO("Computing sub-scenes")
 
+                # [PATCH13] OpenMVS 2.2.0 computes the box round a scene without a region of interest (ROI) from all depth-map
+                # samples in single precision; at heights of about 1,440 m (Baguio) that box ended at 330 m, every sub-scene's
+                # box lay below the ground and the fusion trimmed every point away ("Point-cloud trimmed to ROI", 0 points,
+                # "no PLY files available"; Burnham Park, 9,246 photos, 2026-11-18). A scene that has a ROI skips that
+                # computation, so the scene gets one first: the box of its own sparse points (--estimate-roi 1), widened.
+                split_scene_file = openmvs_scene_file
+                try:
+                    split_scene_file = with_sparse_roi(openmvs_scene_file, tree.openmvs, depthmaps_dir, gpu_config)
+                except Exception as e:
+                    log.WARNING("[PATCH13] Cannot set the region of interest before splitting, OpenMVS estimates it: %s" % str(e))
+
                 subscene_densify_ini_file = os.path.join(tree.openmvs, 'subscene-config.ini')
                 with open(subscene_densify_ini_file, 'w+') as f:
                     f.write("Optimize = 0\nEstimation Geometric Iters = 0\nMin Views Filter = 1\n")
@@ -142,7 +192,7 @@ class ODMOpenMVSStage(types.ODM_Stage):
                     "-v 0",
                 ]
                 system.run('"%s" "%s" %s' % (context.omvs_densify_path, 
-                                        openmvs_scene_file,
+                                        split_scene_file,
                                         ' '.join(config + gpu_config)))
                 
                 scene_files = glob.glob(os.path.join(tree.openmvs, "scene_[0-9][0-9][0-9][0-9].mvs"))
