@@ -30,7 +30,7 @@ ExternalProject_Add(${_proj_name}
   #--Download step--------------
   DOWNLOAD_DIR      ${SB_DOWNLOAD_DIR}
   GIT_REPOSITORY    https://github.com/HikeAndMap/OpenSfM/
-  GIT_TAG           9243efc12f65f60f9010a749fd160932d36035c2
+  GIT_TAG           8b7119c81aba83e617b3b18eab113d8e58a98b41
   #--Update/Patch step----------
   UPDATE_COMMAND    git submodule update --init --recursive
   #--Configure step-------------

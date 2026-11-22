@@ -95,6 +95,34 @@ class GPSRefMock:
         self.values = [ref]
 
 
+# [PATCH14] DJI writes the gimbal of some aircraft (Matrice 4E, 2026) with the roll at +-180 degrees: straight down is then
+# pitch -90, roll 180 and a gimbal yaw 180 degrees from the aircraft's yaw. As Euler angles (yaw, pitch, roll) that is the same
+# camera as (yaw + 180, 180 - pitch, roll - 180). ODX took the yaw from the AIRCRAFT (FlightYawDegree) and the pitch and roll from
+# the gimbal, so it combined a yaw with a roll of 180 and made the camera look straight UP (omega 180). The photos of such an
+# aircraft were started upside down, and a survey of them without GCP marks folded away from the others (Burnham Park, 2026-11).
+# Such a photo now gets the turned pitch and roll (roll within -90..90) with the gimbal's own yaw + 180 - which is the aircraft's
+# yaw within a degree on the Matrice 4E. Mavic, Mini and Phantom write roll 0 and are not touched.
+def normalize_dji_gimbal(pitch, roll):
+    """
+    :param pitch DJI gimbal pitch in degrees (-90 = straight down)
+    :param roll DJI gimbal roll in degrees
+    :return (pitch, roll, flipped): the same camera with the roll within -90..90 (for the aircraft's yaw), and whether it was turned
+    """
+    if pitch is None or roll is None or abs(roll) <= 90:
+        return pitch, roll, False
+    roll = roll - 180.0 if roll > 0 else roll + 180.0
+    return normalize_degrees(180.0 - pitch), roll, True
+
+
+def normalize_degrees(a):
+    """[PATCH14] An angle in degrees brought into -180 .. 180."""
+    while a > 180.0:
+        a -= 360.0
+    while a <= -180.0:
+        a += 360.0
+    return a
+
+
 class ODM_Photo:
     """ODMPhoto - a class for ODMPhotos"""
 
@@ -168,6 +196,8 @@ class ODM_Photo:
         self.gps_xy_stddev = None # Dilution of Precision X/Y
         self.gps_z_stddev = None # Dilution of Precision Z
         self.rtk_flag = None # [PATCH6] DJI RtkFlag (50 = fixed)
+        self.gimbal_roll_flipped = False # [PATCH14] the gimbal angles were written as roll +-180 and read back as roll 0
+        self.gimbal_yaw = None # [PATCH14] DJI GimbalYawDegree, used only for such a photo
 
         # Misc SFM
         self.camera_projection = 'brown'
@@ -481,6 +511,7 @@ class ODM_Photo:
                     self.set_attr_from_xmp_tag('yaw', xtags, ['@drone-dji:FlightYawDegree', 'drone-dji:FlightYawDegree', '@Camera:Yaw', 'Camera:Yaw'], float)
                     self.set_attr_from_xmp_tag('pitch', xtags, ['@drone-dji:GimbalPitchDegree', 'drone-dji:GimbalPitchDegree', '@Camera:Pitch', 'Camera:Pitch'], float)
                     self.set_attr_from_xmp_tag('roll', xtags, ['@drone-dji:GimbalRollDegree', 'drone-dji:GimbalRollDegree', '@Camera:Roll', 'Camera:Roll'], float)
+                    self.set_attr_from_xmp_tag('gimbal_yaw', xtags, ['@drone-dji:GimbalYawDegree', 'drone-dji:GimbalYawDegree'], float) # [PATCH14]
 
                 except Exception as e:
                     log.WARNING("Cannot read XMP tags for %s: %s" % (self.filename, str(e)))
@@ -508,6 +539,11 @@ class ODM_Photo:
             # Roll: 0 (assuming gimbal)
             if self.has_ypr():
                 if self.camera_make.lower() in ['dji', 'hasselblad']:
+                    # [PATCH14] a gimbal written as roll +-180 (Matrice 4E: straight down = pitch -90, roll 180, gimbal yaw = aircraft
+                    # yaw + 180) is the same camera as roll 0 with the gimbal's yaw + 180 (see normalize_dji_gimbal)
+                    self.pitch, self.roll, self.gimbal_roll_flipped = normalize_dji_gimbal(self.pitch, self.roll)
+                    if self.gimbal_roll_flipped and self.gimbal_yaw is not None:
+                        self.yaw = normalize_degrees(self.gimbal_yaw + 180.0) # the turned form belongs to the gimbal's yaw + 180
                     self.pitch = 90 + self.pitch
 
                 if self.camera_make.lower() == 'sensefly':

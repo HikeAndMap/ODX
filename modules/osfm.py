@@ -365,6 +365,11 @@ class OSFMContext:
                 config.append("bundle_use_gcp: yes")
                 if args.force_gps:
                     config.append("bundle_compensate_gps_bias: yes")
+                elif reconstruction is not None and gps_weights.keep_unmarked_surveys(photos, gps_weights.marked_filenames(reconstruction.gcp)):
+                    # [PATCH14] a survey without GCP marks keeps its GPS (the photos of the marked surveys are silenced in run_opensfm);
+                    # each camera's height system may differ from the GCPs', so its offset is solved - as a shift only
+                    config.append("bundle_compensate_gps_bias: yes")
+                    config.append("bundle_gps_bias_translation_only: yes")
                 elif gps_weights.keep_gps_with_gcp(photos):
                     # [PATCH6] the RTK photos stay position control next to the GCPs (the others are silenced in run_opensfm)
                     log.INFO("[PATCH6] GCPs and %s RTK photos: the RTK positions stay in the bundle adjustment next to the GCPs" % gps_weights.rtk_count(photos))

@@ -34,7 +34,13 @@ class ODMOpenSfMStage(types.ODM_Stage):
         gps_weights.mark_sources(photos)
         gps_weights.set_accuracy_without_own(photos, args.gps_accuracy, args.gps_accuracy_vertical)
         octx.setup(args, tree.dataset_raw, photos, reconstruction=reconstruction, rerun=self.rerun())
-        if reconstruction.has_gcp() and not args.force_gps and gps_weights.keep_gps_with_gcp(photos):
+        # [PATCH14] with GCPs, a survey without GCP marks keeps its GPS; the photos of the surveys with marks do not pull
+        marked = gps_weights.marked_filenames(reconstruction.gcp) if reconstruction.has_gcp() else set()
+        if reconstruction.has_gcp() and not args.force_gps and gps_weights.keep_unmarked_surveys(photos, marked):
+            silenced = gps_weights.silence_marked_surveys(photos, marked)
+            log.INFO(gps_weights.unmarked_summary(photos, marked))
+            log.INFO("[PATCH14] The %s photos of the surveys with GCP marks do not pull on positions (accuracy %s m); the GCPs place them" % (silenced, gps_weights.NO_PULL_METRES))
+        elif reconstruction.has_gcp() and not args.force_gps and gps_weights.keep_gps_with_gcp(photos):
             silenced = gps_weights.silence_without_rtk(photos)
             log.INFO("[PATCH6] With GCPs, the %s photos without RTK do not pull on positions (accuracy %s m); only the RTK photos and the GCPs do" % (silenced, gps_weights.NO_PULL_METRES))
         elif not reconstruction.has_gcp() and gps_weights.has_rtk_anchors(photos):
@@ -75,6 +81,14 @@ class ODMOpenSfMStage(types.ODM_Stage):
                 gps_weights.log_rtk_check(octx.opensfm_project_path, photos, used=(not args.force_gps and gps_weights.keep_gps_with_gcp(photos)))
             except Exception as e:
                 log.WARNING("[PATCH6] Cannot compare the RTK photos with the GCPs: %s" % str(e))
+
+        # [PATCH14] per survey: how far its cameras are from their GPS, and how much it is tilted against it (a survey that did not
+        # fit the others shows here). Also only while reconstruction.json is still topocentric.
+        if reconstruction.is_georeferenced() and (not io.file_exists(tree.opensfm_topocentric_reconstruction) or self.rerun()):
+            try:
+                gps_weights.log_survey_check(octx.opensfm_project_path, photos, marked)
+            except Exception as e:
+                log.WARNING("[PATCH14] Cannot compare the surveys with their GPS: %s" % str(e))
 
         # Stats are computed in the local CRS (before geoprojection)
         if not args.skip_report:

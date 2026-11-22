@@ -205,3 +205,149 @@ def log_rtk_check(opensfm_path, photos, used):
         log.WARNING(text)
     else:
         log.INFO(text)
+
+
+# [PATCH14] Several surveys, several drones, GCPs marked in only some of them.
+#
+# With a GCP file stock ODX switches every photo's GPS off (bundle_use_gps: no): the GCPs place the model. A survey whose photos
+# have no GCP mark - a newer flight over an older, controlled survey, often with another drone - is then held only by its matches
+# with the other surveys. When those are weak or one-sided (another season, another camera, overlap along one edge) the survey
+# can turn as a whole: at Burnham Park (2026-11) a Matrice 4E flight was folded 34 degrees around one edge and ended up to 210 m
+# below its own GPS. Now:
+# 1. A survey is the photos of one month and one camera (make + model).
+# 2. With a GCP file, the photos of a survey that has no GCP mark keep their GPS in the bundle adjustment with their own accuracy
+#    (--gps-accuracy without RTK). The photos of surveys with GCP marks do not pull on positions (accuracy NO_PULL_METRES, as
+#    [PATCH6] already did next to RTK photos); RTK photos keep theirs.
+# 3. Each camera's GPS may sit in another height system than the GCPs (a consumer drone's barometric height, the Matrice 4E's
+#    ellipsoidal height: tens of metres apart). OpenSfM's GPS bias (bundle_compensate_gps_bias) solves an offset per camera; it is
+#    limited to a shift (bundle_gps_bias_translation_only, our OpenSfM fork), because a rotation would let the survey tilt again.
+# 4. After the reconstruction, the console says per survey how far its cameras are from their GPS and how much the survey is
+#    tilted against its GPS - a warning above SURVEY_TILT_WARN_DEGREES.
+
+SURVEY_TILT_WARN_DEGREES = 3.0
+SURVEY_MIN_PHOTOS = 10
+SURVEY_MIN_SPREAD_METRES = 20.0   # a survey narrower than this in both directions has no plane to compare
+
+
+def survey_key(p):
+    """[PATCH14] The survey of a photo: its month (as [PATCH10] groups them) and its camera."""
+    from modules import surveys
+    camera = ("%s %s" % (getattr(p, 'camera_make', '') or '', getattr(p, 'camera_model', '') or '')).strip() or 'unknown camera'
+    return "%s %s" % (surveys.survey_label(surveys.capture_time(p)), camera)
+
+
+def marked_filenames(gcp):
+    """[PATCH14] The photos with a GCP mark in the GCP file (a GCPFile), or an empty set."""
+    if gcp is None or not gcp.exists():
+        return set()
+    return {e.filename for e in gcp.iter_entries()}
+
+
+def surveys_without_marks(photos, marked):
+    """[PATCH14] The surveys (keys) that have photos with GPS but no GCP mark in any of their photos, in order of their keys."""
+    with_marks = {survey_key(p) for p in photos if p.filename in marked}
+    return sorted({survey_key(p) for p in photos if _has_gps(p)} - with_marks)
+
+
+def keep_unmarked_surveys(photos, marked):
+    """[PATCH14] With a GCP file: True when a survey without GCP marks keeps its GPS (and the GPS bias is solved per camera)."""
+    return len(surveys_without_marks(photos, marked)) > 0
+
+
+def silence_marked_surveys(photos, marked):
+    """[PATCH14] With a GCP file and surveys without marks: the photos of the surveys WITH marks, RTK photos excepted, do not pull
+    on positions (the GCPs place them). In memory only. Returns how many."""
+    unmarked = set(surveys_without_marks(photos, marked))
+    n = 0
+    for p in photos:
+        if _has_gps(p) and not is_rtk(p) and survey_key(p) not in unmarked:
+            p.gps_xy_stddev = p.gps_z_stddev = NO_PULL_METRES
+            n += 1
+    return n
+
+
+def unmarked_summary(photos, marked):
+    """[PATCH14] The console line: which surveys keep their GPS."""
+    unmarked = surveys_without_marks(photos, marked)
+    counts = {k: sum(1 for p in photos if _has_gps(p) and survey_key(p) == k) for k in unmarked}
+    return "[PATCH14] Surveys without GCP marks keep their GPS in the bundle adjustment (with a height offset solved per camera): %s" % (
+        ", ".join("%s (%s photos)" % (k, counts[k]) for k in unmarked))
+
+
+def _plane_normal(points):
+    """Unit normal of the plane through points (n x 3) and the two largest spreads (m), or None when too few or too narrow."""
+    import numpy as np
+    a = np.array(points, dtype=float)
+    if len(a) < 3:
+        return None
+    a = a - a.mean(axis=0)
+    w, v = np.linalg.eigh(a.T.dot(a) / len(a))
+    spreads = np.sqrt(np.maximum(w, 0.0))
+    if spreads[1] * 2 < SURVEY_MIN_SPREAD_METRES:
+        return None
+    n = v[:, 0]
+    return n / np.linalg.norm(n) * (1 if n[2] >= 0 else -1)
+
+
+def survey_differences(photos, centres_xyz, gps_xyz):
+    """[PATCH14] Per survey: photos, median horizontal and vertical distance of the cameras from their GPS (GPS minus camera,
+    positive = the GPS says higher) and the tilt between the plane of the cameras and the plane of their GPS positions (None when
+    there is no plane). centres_xyz / gps_xyz: {filename: (x, y, z)} in one local metric frame."""
+    import numpy as np
+    out = []
+    by_survey = {}
+    for p in photos:
+        if p.filename in centres_xyz and p.filename in gps_xyz:
+            by_survey.setdefault(survey_key(p), []).append(p.filename)
+    for key in sorted(by_survey):
+        names = by_survey[key]
+        if len(names) < SURVEY_MIN_PHOTOS:
+            continue
+        c = np.array([centres_xyz[n] for n in names])
+        g = np.array([gps_xyz[n] for n in names])
+        d = g - c
+        horizontal = float(np.median(np.hypot(d[:, 0], d[:, 1])))
+        vertical = float(np.median(d[:, 2]))
+        nc, ng = _plane_normal(c), _plane_normal(g)
+        tilt = None
+        if nc is not None and ng is not None:
+            tilt = float(np.degrees(np.arccos(min(1.0, abs(float(nc.dot(ng)))))))
+        out.append((key, len(names), horizontal, vertical, tilt))
+    return out
+
+
+def survey_check_lines(diffs, marked_keys):
+    """[PATCH14] Console lines (text, warn) of the survey check."""
+    lines = []
+    for key, n, horizontal, vertical, tilt in diffs:
+        role = "placed by its GCP marks" if key in marked_keys else "placed by its own GPS"
+        tilt_text = "tilt not measurable (too narrow)" if tilt is None else "tilted %.1f deg against its GPS" % tilt
+        warn = tilt is not None and tilt > SURVEY_TILT_WARN_DEGREES
+        text = "[PATCH14] Survey %s, %s photos (%s): cameras %.1f m from their GPS horizontally, GPS %+.1f m in height, %s" % (
+            key, n, role, horizontal, vertical, tilt_text)
+        if warn:
+            text += " - MORE THAN %.0f DEG: this survey did not fit the others; check its photos (orientation, overlap) before using the result" % SURVEY_TILT_WARN_DEGREES
+        lines.append((text, warn))
+    return lines
+
+
+def log_survey_check(opensfm_path, photos, marked):
+    """[PATCH14] OpenSfM stage, while reconstruction.json is still topocentric: log the survey check."""
+    from opensfm.dataset import DataSet
+    from modules import log
+
+    ds = DataSet(opensfm_path)
+    reference = ds.load_reference()
+    centres, gps = {}, {}
+    for rec in ds.load_reconstruction():
+        for shot_id, shot in rec.shots.items():
+            centres[shot_id] = tuple(shot.pose.get_origin())
+    for p in photos:
+        if _has_gps(p) and getattr(p, 'altitude', None) is not None:
+            gps[p.filename] = tuple(reference.to_topocentric(p.latitude, p.longitude, p.altitude))
+    marked_keys = {survey_key(p) for p in photos if p.filename in marked}
+    for text, warn in survey_check_lines(survey_differences(photos, centres, gps), marked_keys):
+        if warn:
+            log.WARNING(text)
+        else:
+            log.INFO(text)
