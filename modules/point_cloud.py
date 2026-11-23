@@ -290,14 +290,15 @@ def post_point_cloud_steps(args, tree, rerun=False):
                             )
 
             log.INFO("Classifying {} using OpenPointClass (2/2)".format(tree.odm_georeferencing_model_laz))
-            classify(tree.odm_georeferencing_model_laz, args.max_concurrency)
-
-            with open(pc_classify_marker, 'w') as f:
-                f.write('Classify: smrf\n')
-                f.write('Scalar: {}\n'.format(args.smrf_scalar))
-                f.write('Slope: {}\n'.format(args.smrf_slope))
-                f.write('Threshold: {}\n'.format(args.smrf_threshold))
-                f.write('Window: {}\n'.format(args.smrf_window))
+            # [PATCH15] done only when OpenPointClass classified it too: a restart tries again instead of keeping SMRF's classes alone
+            if classify(tree.odm_georeferencing_model_laz, args.max_concurrency):
+                with open(pc_classify_marker, 'w') as f:
+                    f.write('Classify: smrf\n')
+                    f.write('Scalar: {}\n'.format(args.smrf_scalar))
+                    f.write('Slope: {}\n'.format(args.smrf_slope))
+                    f.write('Threshold: {}\n'.format(args.smrf_threshold))
+                    f.write('Window: {}\n'.format(args.smrf_window))
+                    f.write('OpenPointClass: yes\n')
 
     # XYZ point cloud output
     if args.pc_csv:

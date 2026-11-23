@@ -1,0 +1,2 @@
+# [PATCH15] model files byte for byte (no line-ending conversion: their SHA-256 is checked)
+hikeandmap/models/** binary

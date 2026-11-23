@@ -1,5 +1,6 @@
 # [PATCH7] Puts the YOLOX models of modules/vehicle_boxes.py into the node image when it is built, each checked by its
 # SHA-256, so that a run never depends on downloading them. Run from the Dockerfile: python3 hikeandmap/fetch_models.py
+# [PATCH15] It also checks the OpenPointClass model that is part of the repository: the build stops when it is missing or changed.
 import hashlib
 import os
 import sys
@@ -29,3 +30,14 @@ for name, url, sha256 in vehicle_boxes.MODELS:
         sys.exit("[PATCH7] %s has SHA-256 %s, expected %s: not used" % (name, digest, sha256))
     os.replace(tmp, path)
     print("[PATCH7] %s checked (%s bytes)" % (name, os.path.getsize(path)))
+
+# [PATCH15] The OpenPointClass model of the repository (modules/opc.py, hikeandmap/models/openpointclass)
+from modules import opc  # noqa: E402
+
+opc_path = os.path.abspath(opc.MODEL_FILE)
+if not os.path.isfile(opc_path):
+    sys.exit("[PATCH15] %s is missing" % opc_path)
+opc_digest = opc._sha256(opc_path)
+if opc_digest != opc.MODEL_SHA256:
+    sys.exit("[PATCH15] %s has SHA-256 %s, expected %s" % (opc_path, opc_digest, opc.MODEL_SHA256))
+print("[PATCH15] OpenPointClass model checked (%s bytes)" % os.path.getsize(opc_path))

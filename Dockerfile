@@ -54,6 +54,7 @@ RUN bash configure.sh installruntimedeps \
   && bash -c "eval $(python3 /code/modules/context.py) && python3 -c 'from opensfm import io, pymap'"
 
 # HikeAndMap [PATCH7]: the YOLOX models in the image, checked by their SHA-256, so that a run never has to download them
+# HikeAndMap [PATCH15]: and the OpenPointClass model of the repository checked (hikeandmap/models/openpointclass)
 RUN python3 /code/hikeandmap/fetch_models.py
 
 # Entry point
