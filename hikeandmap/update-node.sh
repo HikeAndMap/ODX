@@ -14,7 +14,7 @@
 # that node; a build with a new patch gets a new node next to the old one, so tasks on the old one can finish - add the new
 # one in WebODM and remove the old one there and with "docker rm -f" when it is no longer needed.
 #
-# A node gets the limits of our server (190 GiB RAM, 690 GiB RAM + swap, 15 CPUs, network webodm_default, restart
+# A node gets the limits of our server (190 GiB RAM, 1,190 GiB RAM + swap since the second swap file of 24 Nov 2026, 15 CPUs, network webodm_default, restart
 # unless-stopped) and keeps finished tasks for 14 days (NodeODX's own default is 2 days), so a task can still be restarted
 # from a stage after a run of two days. Override with MEMORY, MEMORY_SWAP, CPUS, CLEANUP_MINUTES, NETWORK, NODE.
 # The first time a node exists, add it in WebODM: Processing nodes > Add, hostname = the node's name, port 3000.
@@ -23,7 +23,7 @@ set -euo pipefail
 WORK=${WORK:-/root/hikeandmap}
 NETWORK=${NETWORK:-webodm_default}
 MEMORY=${MEMORY:-190g}
-MEMORY_SWAP=${MEMORY_SWAP:-690g}
+MEMORY_SWAP=${MEMORY_SWAP:-1190g}
 CPUS=${CPUS:-15}
 CLEANUP_MINUTES=${CLEANUP_MINUTES:-20160}
 
