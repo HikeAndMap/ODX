@@ -72,6 +72,7 @@ rerun_stages = {
     'pc_quality': 'opensfm',
     'pc_sample': 'odm_filterpoints',
     'pc_skip_geometric': 'openmvs',
+    'pc_tile_from_photos': 'openmvs',
     'primary_band': 'dataset',
     'project_path': None,
     'radiometric_calibration': 'opensfm',
@@ -467,6 +468,19 @@ def config(argv=None, parser=None):
                     help=('Set point cloud quality. Higher quality generates better, denser point clouds, but requires more memory and takes longer. Each step up in quality increases processing time roughly by a factor of 4x.'
                         'Can be one of: %(choices)s. Default: '
                         '%(default)s'))
+
+    # [PATCH16]
+    parser.add_argument('--pc-tile-from-photos',
+                        metavar='<integer>',
+                        action=StoreValue,
+                        default=3000,
+                        type=int,
+                        help=('Make the dense point cloud in pieces (tiles) from the start when the task has at least this many '
+                              'photos; 0 = never (in one piece first, as ODX does). In one piece the dense point cloud of some '
+                              'thousands of 50 MP photos needs more memory than the server has: ODX then runs out of memory and '
+                              'only cuts it into pieces after that, hours later. The pieces share the camera positions of the '
+                              'whole task (one reconstruction, all GCPs); only the fusion of the depth maps is done per piece. '
+                              'Default: %(default)s'))
 
     parser.add_argument('--pc-classify',
             action=StoreTrue,

@@ -146,6 +146,23 @@ class ODMOpenMVSStage(types.ODM_Stage):
                 pc_tile = True
                 config.append("--fusion-mode 1")
 
+            # [PATCH16] A task with many photos is made in pieces from the start. In one piece the dense point cloud of some
+            # thousands of 50 MP photos needs more than the RAM (Burnham, 9,246 photos: out of memory after 18.5 h), and ODX
+            # only cut it into pieces after running out of memory. The pieces share the camera positions of the whole task.
+            tile_from = getattr(args, 'pc_tile_from_photos', 0) or 0
+            if pc_tile:
+                log.INFO("[PATCH16] ODX_LOW_MEMORY is set: the dense point cloud is made in pieces")
+            elif tile_from > 0 and len(photos) >= tile_from:
+                pc_tile = True
+                config.append("--fusion-mode 1")
+                log.INFO("[PATCH16] %s photos, at least pc-tile-from-photos (%s): the dense point cloud is made in pieces from the start"
+                         % (len(photos), tile_from))
+            elif tile_from > 0:
+                log.INFO("[PATCH16] %s photos, fewer than pc-tile-from-photos (%s): the dense point cloud is made in one piece"
+                         % (len(photos), tile_from))
+            else:
+                log.INFO("[PATCH16] pc-tile-from-photos is 0: the dense point cloud is tried in one piece first")
+
             try:
                 run_densify()
             except system.SubprocessException as e:
