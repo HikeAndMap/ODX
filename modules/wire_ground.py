@@ -28,6 +28,7 @@ import numpy as np
 import cv2
 
 from modules import wire_masks
+from modules.memory_monitor import monitor as memory_monitor
 
 ROOF_HEIGHT = 1.5           # metres above the ground
 STEP_HEIGHT = 0.5           # metres the mesh rises ...
@@ -160,23 +161,24 @@ def write_cleared(output_file, masks_file, mesh_file, point_cloud, smrf, max_con
     """Write the masks of masks_file with roofs and roof edges left out (output_file). Returns True when written,
     False when the ground could not be made (the caller then uses masks_file as it is)."""
     started = time.time()
+    peak = memory_monitor.step()  # [PATCH5] the memory of this step (the ground grid by PDAL included), on its lines
     ground_tif = os.path.join(os.path.dirname(output_file), "wire_masks_ground.tif")
     try:
         ground = ground_grid(point_cloud, ground_tif, smrf, log)
     except Exception as e:
-        log.WARNING("[PATCH8] Cannot find the ground in %s (%s): overhead wires looked for on roofs too" % (point_cloud, e))
+        log.WARNING("[PATCH8] Cannot find the ground in %s (%s): overhead wires looked for on roofs too%s" % (point_cloud, e, peak.text(close=True)))
         return False
     if ground is None:
-        log.WARNING("[PATCH8] No ground found in %s: overhead wires looked for on roofs too" % point_cloud)
+        log.WARNING("[PATCH8] No ground found in %s: overhead wires looked for on roofs too%s" % (point_cloud, peak.text(close=True)))
         return False
-    log.INFO("[PATCH8] Ground grid of %.0f m: %d x %d cells, %.0f %% of them with ground points, the rest filled from around them"
-             % (GROUND_CELL, ground[0].shape[1], ground[0].shape[0], 100 * ground[4]))
+    log.INFO("[PATCH8] Ground grid of %.0f m: %d x %d cells, %.0f %% of them with ground points, the rest filled from around them%s"
+             % (GROUND_CELL, ground[0].shape[1], ground[0].shape[0], 100 * ground[4], peak.text()))
 
     vertices = wire_masks.read_mesh_vertices(mesh_file)
     with open(masks_file, 'rb') as f:
         magic = f.read(8)
         if magic != wire_masks.MAGIC:
-            log.WARNING("[PATCH8] %s is not a v2 masks file: overhead wires looked for on roofs too" % masks_file)
+            log.WARNING("[PATCH8] %s is not a v2 masks file: overhead wires looked for on roofs too%s" % (masks_file, peak.text(close=True)))
             return False
         x_min, y_min, tile, cell = struct.unpack('<dddd', f.read(32))
         nx, ny, n = struct.unpack('<iii', f.read(12))
@@ -234,8 +236,8 @@ def write_cleared(output_file, masks_file, mesh_file, point_cloud, smrf, max_con
 
     roof_share = float(np.mean([np.unpackbits(r)[:n * n].mean() for r in raised.values()])) if raised else 0.0
     log.INFO("[PATCH8] Roofs and roof edges left out of the overhead wires: %.0f %% of the mesh, %.0f %% of the checked photo "
-             "area; wires now on %.1f %% of the checked photo area (was %.1f %%), took %.1f min" % (
+             "area; wires now on %.1f %% of the checked photo area (was %.1f %%), took %.1f min%s" % (
                  100 * roof_share, 100 * (1 - checked_after / max(1.0, float(checked_before))),
                  100 * wire_after / max(1.0, float(checked_after)), 100 * wire_before / max(1.0, float(checked_before)),
-                 (time.time() - started) / 60.0))
+                 (time.time() - started) / 60.0, peak.text(close=True)))
     return True

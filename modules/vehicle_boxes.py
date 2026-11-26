@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import cv2
 
+from modules.memory_monitor import monitor as memory_monitor
+
 MODEL_VERSION = "0.1.1rc0"
 MODEL_NAMESPACE = "yolox"
 MODELS = [  # file, URL, SHA-256 (checked when the node image is built, hikeandmap/fetch_models.py)
@@ -193,6 +195,7 @@ def make_session(model_file, threads):
 def write_boxes(output_file, nvm_file, model_files, max_concurrency, log, workers=None):
     """Detect in every view of the NVM file and write one line per box: image_name x0 y0 x1 y1 class score (pixels,
     margin included). Returns (photos, photos with boxes, boxes)."""
+    peak = memory_monitor.step()  # [PATCH5] the memory of this step, on its summary line
     images = nvm_images(nvm_file)
     if workers is None:
         workers = WORKERS
@@ -240,6 +243,7 @@ def write_boxes(output_file, nvm_file, model_files, max_concurrency, log, worker
     os.replace(tmp, output_file)
     with_boxes = sum(1 for l in lines if l)
     total = sum(len(l) for l in lines)
-    log.INFO("[PATCH7] %s boxes in %s of %s photos (%s), took %.0f min" % (
-        total, with_boxes, len(images), ", ".join("%s %s" % (counts[c], c) for c in sorted(counts)) or "none", (time.time() - started) / 60.0))
+    log.INFO("[PATCH7] %s boxes in %s of %s photos (%s), took %.0f min%s" % (
+        total, with_boxes, len(images), ", ".join("%s %s" % (counts[c], c) for c in sorted(counts)) or "none", (time.time() - started) / 60.0,
+        peak.text(close=True)))
     return len(images), with_boxes, total

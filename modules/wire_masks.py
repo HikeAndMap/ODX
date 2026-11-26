@@ -38,6 +38,8 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import cv2
 
+from modules.memory_monitor import monitor as memory_monitor
+
 TILE_CELLS = 1280           # cells per tile side
 CELL = 0.015                # metres per cell
 TILE = TILE_CELLS * CELL    # 19.2 m
@@ -424,6 +426,7 @@ def write_masks(output_file, nvm_file, mesh_file, max_concurrency, log, ranks=No
     """Find the wires of every view on every tile of the mesh and write the masks file. Returns a summary dict.
     ranks: [PATCH10] survey of every NVM view (view_ranks), or None for one survey."""
     started = time.time()
+    peak = memory_monitor.step()  # [PATCH5] the memory of this step, on its summary line
     views = read_nvm(nvm_file)
     sizes = [image_size(v['path']) for v in views]
     vertices = read_mesh_vertices(mesh_file)
@@ -484,9 +487,9 @@ def write_masks(output_file, nvm_file, mesh_file, max_concurrency, log, ranks=No
                'wire_share': wire_share, 'checked_share': float(weights.mean()) if shares else 0.0,
                'minutes': (time.time() - started) / 60.0, 'failed': len(failed)}
     log.INFO("[PATCH8] Overhead wires: %s masks on %s of %s tiles (each photo checked on %.0f %% of its tiles on average), "
-             "wires on %.1f %% of the checked photo area, took %.0f min" % (
+             "wires on %.1f %% of the checked photo area, took %.0f min%s" % (
                  summary['masks'], analysed, len(tiles), 100 * summary['checked_share'], 100 * summary['wire_share'],
-                 summary['minutes']))
+                 summary['minutes'], peak.text(close=True)))
     if failed:
         log.WARNING("[PATCH8] Overhead wires: %d tile(s) skipped after an error, left unchecked (first: tile %d,%d, %s)" % (
             len(failed), failed[0][0], failed[0][1], failed[0][2]))

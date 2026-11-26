@@ -111,6 +111,51 @@ def gib(value):
     return "%.1f GiB" % (value / 1024.0 ** 3) if value is not None else "no limit"
 
 
+class StepPeak:
+    """[PATCH5] The memory of one step inside a stage (PATCH7 vehicles and people, PATCH8 overhead wires and roofs), for its
+    own console line: what was in use when it started and the peak since, sampled with the stage's own samples. Measured like
+    the stage figures (the node's container), so it includes what the run already held when the step started."""
+
+    def __init__(self, monitor):
+        self._monitor = monitor
+        self.start_total = None
+        self.peak_ram = 0
+        self.peak_swap = 0
+        self.peak_total = 0
+        monitor._add_step(self)
+        self.start_total = self.peak_total if self.peak_ram or self.peak_swap else None
+
+    def _update(self, ram, swap):
+        self.peak_ram = max(self.peak_ram, ram)
+        self.peak_swap = max(self.peak_swap, swap)
+        self.peak_total = max(self.peak_total, ram + swap)
+
+    def text(self, close=False):
+        """'; memory 3.1 GiB at the start, peak 12.4 GiB RAM, 0.0 GiB swap, 12.4 GiB together' - empty where nothing is
+        measured. Takes a sample first, so a short step still has one. close=True for the step's last line: it is then no
+        longer updated."""
+        if not self._monitor.active:
+            self.close()
+            return ""
+        self._monitor._take_sample()
+        if close:
+            self.close()
+        if not (self.peak_ram or self.peak_swap):
+            return ""
+        start = (gib(self.start_total) + " at the start, ") if self.start_total is not None else ""
+        return "; memory %speak %s RAM, %s swap, %s together" % (start, gib(self.peak_ram), gib(self.peak_swap), gib(self.peak_total))
+
+    def close(self):
+        self._monitor._remove_step(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
 class MemoryMonitor:
     def __init__(self):
         self._lock = threading.Lock()
@@ -120,6 +165,22 @@ class MemoryMonitor:
         self._stage = None
         self._stages = {}  # name -> {'peak_ram_bytes', 'peak_swap_bytes', 'peak_total_bytes'}
         self._order = []
+        self._steps = []  # open StepPeak objects, updated by every sample
+
+    def step(self):
+        """[PATCH5] A StepPeak for one step inside a stage: use as `with monitor.step() as peak:` and put peak.text() in the
+        step's summary line."""
+        return StepPeak(self)
+
+    def _add_step(self, step):
+        with self._lock:
+            self._steps.append(step)
+        self._take_sample()  # the memory in use as the step starts
+
+    def _remove_step(self, step):
+        with self._lock:
+            if step in self._steps:
+                self._steps.remove(step)
 
     @property
     def active(self):
@@ -154,6 +215,8 @@ class MemoryMonitor:
             return
         ram, swap = values
         with self._lock:
+            for step in self._steps:
+                step._update(ram, swap)
             if self._stage is None:
                 return
             entry = self._stages[self._stage]
